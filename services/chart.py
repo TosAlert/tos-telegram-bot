@@ -150,7 +150,7 @@ class ChartDownloader:
             page.goto(url, wait_until="commit", timeout=30000)
 
         page.set_viewport_size({
-            "width": 1800,
+            "width": 1100,
             "height": 1600,
         })
 
