@@ -583,14 +583,14 @@ def get_chart(ticker):
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
 
-        # Finviz ma'lumotlarini o'qish
-        finviz = downloader.parse_finviz_info(page)
-
         # Grafikni olish
         img = downloader._capture_chart(page)
+
+        # Finviz ma'lumotlarini o'qish
+        finviz = downloader.parse_finviz_info(page)
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
-        return img
+        return img, finviz
 
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}")
@@ -610,11 +610,13 @@ def get_chart(ticker):
         print(f"[Chart] Qayta urinish : {ticker}")
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
-        finviz = downloader.parse_finviz_info(page)
+        # Avval grafikni olamiz
         img = downloader._capture_chart(page)
+        # Keyin Finviz ma'lumotlarini o'qiymiz
+        inviz = downloader.parse_finviz_info(page)
         if img:
             print(f"[Chart] Qayta urinishda OK : {ticker}")
-        return img
+        return img, finviz
     except Exception as e:
         print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}")
     finally:
