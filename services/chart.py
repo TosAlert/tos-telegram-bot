@@ -228,6 +228,96 @@ class ChartDownloader:
 
         return page
 
+    def parse_finviz_info(self, page):
+    """Finviz sahifasidan asosiy ma'lumotlarni o'qiydi."""
+
+    try:
+        data = page.evaluate("""
+        () => {
+
+            const result = {
+                company: "",
+                sector: "",
+                industry: "",
+                price: "",
+                change_pct: "",
+                volume: "",
+                avg_volume: "",
+                market_cap: ""
+            };
+
+            // Company
+            const title = document.querySelector("title");
+            if (title) {
+                result.company = title.innerText.split(" Stock")[0].trim();
+            }
+
+            // Jadvaldagi barcha maydonlarni o'qish
+            document.querySelectorAll("table td").forEach(td => {
+
+                const key = td.innerText.trim();
+
+                const valueCell = td.nextElementSibling;
+                if (!valueCell) return;
+
+                const value = valueCell.innerText.trim();
+
+                switch (key) {
+
+                    case "Sector":
+                        result.sector = value;
+                        break;
+
+                    case "Industry":
+                        result.industry = value;
+                        break;
+
+                    case "Market Cap":
+                        result.market_cap = value;
+                        break;
+
+                    case "Volume":
+                        result.volume = value;
+                        break;
+
+                    case "Avg Volume":
+                        result.avg_volume = value;
+                        break;
+
+                }
+            });
+
+            // Yuqoridagi narx
+            const price = document.querySelector("[data-test='instrument-price-last']");
+            if (price)
+                result.price = price.innerText.trim();
+
+            // O'zgarish %
+            const change = document.querySelector("[data-test='instrument-price-change']");
+            if (change)
+                result.change_pct = change.innerText.trim();
+
+            return result;
+        }
+        """)
+
+        print(f"[Finviz] {data}")
+
+        return data
+
+    except Exception as e:
+        print(f"[Finviz Parser] {e}")
+
+        return {
+            "company": "",
+            "sector": "",
+            "industry": "",
+            "price": "",
+            "change_pct": "",
+            "volume": "",
+            "avg_volume": "",
+            "market_cap": ""
+        }
     def _capture_via_share_download(self, page):
 
         try:
