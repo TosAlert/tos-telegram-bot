@@ -73,8 +73,8 @@ class BrowserManager:
             self.context = self.browser.new_context(
 
                 viewport={
-                    "width": 1200,
-                    "height": 900,
+                    "width": 1100,
+                    "height": 1600,
                 },
 
                 accept_downloads=True,
