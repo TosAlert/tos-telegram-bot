@@ -228,7 +228,7 @@ class ChartDownloader:
 
         return page
 
-    def _scale_image(self, img_bytes, max_width=2100, max_height=884):
+    def _scale_image(self, img_bytes, max_width=1400, max_height=589):
         try:
             from PIL import Image
             import io as _io
@@ -397,8 +397,6 @@ class ChartDownloader:
             raise Exception("Download rasmi olinmadi")
 
         print(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
-
-        img_bytes = self._scale_image(img_bytes, max_width=1400, max_height=800)
 
         try:
             close_btn = page.locator(
