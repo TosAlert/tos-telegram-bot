@@ -328,7 +328,7 @@ def send_telegram_photo(caption: str, ticker: str):
             resp = requests.post(url,
                 data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"},
                 files={"photo": (f"{ticker}.png", img_bytes, "image/png")},
-                timeout=30
+                timeout=90
             )
             if resp.ok:
                 print(f"[Telegram] {ticker} grafik bilan yuborildi ✅")
