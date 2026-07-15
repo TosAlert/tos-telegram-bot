@@ -538,7 +538,6 @@ class ChartDownloader:
         try:
             img = self._capture_via_share_download(page)
             if img:
-                img = self._resize_to_target_ratio(img)
                 return img
         except Exception as e:
             print(f"[Chart] Share->Download muvaffaqiyatsiz: {e}")
