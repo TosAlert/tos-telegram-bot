@@ -90,7 +90,7 @@ class ChartDownloader:
             page.route("**/*", _route_handler)
         except Exception as e:
             print(f"[Chart] Route bloklashda xato: {e}")
-
+            
     def _safe_click(self, page, locator, label):
         try:
             locator.scroll_into_view_if_needed(timeout=1500)
@@ -155,7 +155,7 @@ class ChartDownloader:
         })
 
         page.wait_for_timeout(1500)
-
+        
         try:
             page.wait_for_load_state("networkidle", timeout=5000)
         except Exception:
@@ -227,97 +227,6 @@ class ChartDownloader:
             raise Exception(f"Unexpected Finviz page : {title}")
 
         return page
-
-    def parse_finviz_info(self, page):
-        """Finviz sahifasidan asosiy ma'lumotlarni o'qiydi."""
-
-        try:
-            data = page.evaluate("""
-            () => {
-
-                const result = {
-                    company: "",
-                    sector: "",
-                    industry: "",
-                    price: "",
-                    change_pct: "",
-                    volume: "",
-                    avg_volume: "",
-                    market_cap: ""
-                };
-
-                // Company
-                const title = document.querySelector("title");
-                if (title) {
-                    result.company = title.innerText.split(" Stock")[0].trim();
-                }
-
-                // Jadvaldagi barcha maydonlarni o'qish
-                document.querySelectorAll("table td").forEach(td => {
-
-                    const key = td.innerText.trim();
-
-                    const valueCell = td.nextElementSibling;
-                    if (!valueCell) return;
-
-                    const value = valueCell.innerText.trim();
-
-                    switch (key) {
-
-                        case "Sector":
-                            result.sector = value;
-                            break;
-
-                        case "Industry":
-                            result.industry = value;
-                            break;
-
-                        case "Market Cap":
-                            result.market_cap = value;
-                            break;
-
-                        case "Volume":
-                            result.volume = value;
-                            break;
-
-                        case "Avg Volume":
-                            result.avg_volume = value;
-                            break;
-
-                    }
-                });
-
-                // Yuqoridagi narx
-                const price = document.querySelector("[data-test='instrument-price-last']");
-                if (price)
-                    result.price = price.innerText.trim();
-
-                // O'zgarish %
-                const change = document.querySelector("[data-test='instrument-price-change']");
-                if (change)
-                    result.change_pct = change.innerText.trim();
-
-                return result;
-            }
-            """)
-
-            print(f"[Finviz] {data}")
-
-            return data
-
-        except Exception as e:
-            print(f"[Finviz Parser] {e}")
-
-            return {
-                "company": "",
-                "sector": "",
-                "industry": "",
-                "price": "",
-                "change_pct": "",
-                "volume": "",
-                "avg_volume": "",
-                "market_cap": ""
-            }
 
     def _capture_via_share_download(self, page):
 
@@ -469,34 +378,6 @@ class ChartDownloader:
 
         return img_bytes
 
-    def _resize_to_target_ratio(self, img_bytes, target_ratio=12 / 7):
-        """
-        Rasmni berilgan en:bo'y nisbatiga moslaydi. Finviz rasmi juda keng
-        chiqadi — kenglikni markazdan kesib (crop), grafik mazmuni ramkani
-        to'liq to'ldiradigan qilamiz.
-        """
-        from PIL import Image
-        import io as _io
-
-        img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
-        w, h = img.size
-        current_ratio = w / h
-
-        if current_ratio > target_ratio:
-            new_w = int(h * target_ratio)
-            x_offset = (w - new_w) // 2
-            img = img.crop((x_offset, 0, x_offset + new_w, h))
-        elif current_ratio < target_ratio:
-            new_h = int(w / target_ratio)
-            y_offset = (h - new_h) // 2
-            img = img.crop((0, y_offset, w, y_offset + new_h))
-
-        out = _io.BytesIO()
-        img.save(out, format="PNG")
-        result = out.getvalue()
-        print(f"[Chart] Qayta o'lchamlandi: {w}x{h} -> {img.size[0]}x{img.size[1]}")
-        return result
-
     def _find_chart(self, page):
         container_selectors = [
             "#chart-container",
@@ -582,15 +463,10 @@ def get_chart(ticker):
     try:
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
-
-        # Grafikni olish
         img = downloader._capture_chart(page)
-
-        # Finviz ma'lumotlarini o'qish
-        finviz = downloader.parse_finviz_info(page)
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
-        return img, finviz
+        return img
 
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}")
@@ -610,13 +486,10 @@ def get_chart(ticker):
         print(f"[Chart] Qayta urinish : {ticker}")
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
-        # Avval grafikni olamiz
         img = downloader._capture_chart(page)
-        # Keyin Finviz ma'lumotlarini o'qiymiz
-        inviz = downloader.parse_finviz_info(page)
         if img:
             print(f"[Chart] Qayta urinishda OK : {ticker}")
-        return img, finviz
+        return img
     except Exception as e:
         print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}")
     finally:
@@ -626,4 +499,4 @@ def get_chart(ticker):
         except Exception:
             pass
 
-    return None, None
+    return None
