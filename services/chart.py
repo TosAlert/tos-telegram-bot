@@ -396,11 +396,6 @@ class ChartDownloader:
         if not img_bytes:
             raise Exception("Download rasmi olinmadi")
 
-        # Yakuniy rasm dark bo'lsa xato beramiz -> retry / zaxira usul ishga tushadi
-        if _is_image_dark(img_bytes):
-            print("[Chart] ⚠️ Yuklangan rasm DARK holatda!")
-            raise Exception("Rasm dark holatda yuklandi")
-
         print(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
 
         img_bytes = self._scale_image(img_bytes, max_width=1400, max_height=800)
