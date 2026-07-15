@@ -154,7 +154,8 @@ class ChartDownloader:
             "height": 1600,
         })
 
-        page.wait_for_timeout(1500)
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(500)
         
         try:
             page.wait_for_load_state("networkidle", timeout=5000)
@@ -251,13 +252,19 @@ class ChartDownloader:
         share_btn.wait_for(state="visible", timeout=8000)
         self._safe_click(page, share_btn, "Share tugmasi")
 
-        try:
-            page.wait_for_selector('text="Share Chart"', timeout=5000)
-            print("[Chart] 'Share Chart' modal topildi")
-        except Exception:
-            print("[Chart] 'Share Chart' matni topilmadi, davom etamiz")
+        self._safe_click(page, share_btn, "Share tugmasi")
 
-        page.wait_for_timeout(1500)
+        # Modal animatsiyasi tugashini kutamiz
+        page.wait_for_timeout(800)
+
+        # Download tugmasi chiqishini kutamiz
+        download_btn = page.locator("text=Download").first
+        download_btn.wait_for(
+            state="visible",
+            timeout=10000
+        )
+
+        print("[Chart] Download tugmasi ko'rindi")
 
         try:
             page.evaluate("""
@@ -321,7 +328,7 @@ class ChartDownloader:
             with page.expect_download(timeout=15000) as download_info:
                 self._safe_click(page, download_btn, "Download tugmasi")
 
-            download = download_info.value
+            download = d.value
 
             import tempfile
             import os as _os
