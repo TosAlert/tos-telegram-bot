@@ -228,37 +228,6 @@ class ChartDownloader:
 
         return page
 
-    def _scale_image(self, img_bytes, max_width=1400, max_height=589):
-        try:
-            from PIL import Image
-            import io as _io
-
-            img = Image.open(_io.BytesIO(img_bytes))
-            w, h = img.size
-
-            scale = min(max_width / w, max_height / h)
-
-            if abs(scale - 1.0) < 0.01:
-                print(f"[Chart] Rasm o'lchami mos: {w}x{h}")
-                return img_bytes
-
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-
-            img = img.resize((new_w, new_h), Image.LANCZOS)
-
-            out = _io.BytesIO()
-            img.save(out, format="PNG")
-            result = out.getvalue()
-
-            action = "Kichiklashtirish" if scale < 1 else "Kattalashtirish"
-            print(f"[Chart] {action}: {w}x{h} -> {new_w}x{new_h}")
-            return result
-
-        except Exception as e:
-            print(f"[Chart] Resize xato (asl rasm ishlatiladi): {e}")
-            return img_bytes
-
     def _capture_via_share_download(self, page):
 
         try:
