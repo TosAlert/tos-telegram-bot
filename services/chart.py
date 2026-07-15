@@ -228,7 +228,7 @@ class ChartDownloader:
 
         return page
 
-    def _scale_image(self, img_bytes, max_width=1400, max_height=800):
+    def _scale_image(self, img_bytes, max_width=2100, max_height=884):
         try:
             from PIL import Image
             import io as _io
