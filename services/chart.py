@@ -582,6 +582,11 @@ def get_chart(ticker):
     try:
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
+
+        # Finviz ma'lumotlarini o'qish
+        finviz = downloader.parse_finviz_info(page)
+
+        # Grafikni olish
         img = downloader._capture_chart(page)
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
@@ -605,6 +610,7 @@ def get_chart(ticker):
         print(f"[Chart] Qayta urinish : {ticker}")
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
+        finviz = downloader.parse_finviz_info(page)
         img = downloader._capture_chart(page)
         if img:
             print(f"[Chart] Qayta urinishda OK : {ticker}")
@@ -618,4 +624,4 @@ def get_chart(ticker):
         except Exception:
             pass
 
-    return None
+    return None, None
