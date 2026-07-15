@@ -73,7 +73,7 @@ class BrowserManager:
             self.context = self.browser.new_context(
 
                 viewport={
-                    "width": 1100,
+                    "width": 1600,
                     "height": 1600,
                 },
 
