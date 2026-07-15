@@ -365,24 +365,6 @@ class ChartDownloader:
         if not img_bytes:
             raise Exception("Download rasmi olinmadi")
 
-        from PIL import Image, ImageOps
-        import io
-
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        
-        # Telegram uchun bir xil o'lcham
-        img = ImageOps.pad(
-            img,
-            (2048, 1321),
-            method=Image.LANCZOS,
-            color=(34, 37, 43)
-        )
-        
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-
-        img_bytes = buf.getvalue()
-
         print(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
 
         try:
