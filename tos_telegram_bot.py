@@ -24,6 +24,8 @@ GMAIL_USER       = os.getenv("GMAIL_USER")
 GMAIL_APP_PASS   = os.getenv("GMAIL_APP_PASSWORD")
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+FINVIZ_EMAIL     = os.getenv("FINVIZ_EMAIL")
+FINVIZ_PASSWORD  = os.getenv("FINVIZ_PASSWORD")
 
 TOS_SENDER       = "alerts@thinkorswim.com"
 CHECK_INTERVAL   = 30
