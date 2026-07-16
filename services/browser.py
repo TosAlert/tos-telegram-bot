@@ -4,6 +4,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+FINVIZ_EMAIL = os.getenv("FINVIZ_EMAIL")
+FINVIZ_PASSWORD = os.getenv("FINVIZ_PASSWORD")
+
 
 class BrowserManager:
 
@@ -102,6 +105,7 @@ class BrowserManager:
                 "Accept-Language": "en-US,en;q=0.9"
 
             })
+            self.login_finviz()
 
         else:
 
@@ -131,9 +135,50 @@ class BrowserManager:
                 ],
 
             )
+            self.login_finviz()
 
         self.context.set_default_timeout(60000)
         self.context.set_default_navigation_timeout(60000)
+
+    def login_finviz(self):
+
+    if not FINVIZ_EMAIL or not FINVIZ_PASSWORD:
+        print("[Finviz] Login ma'lumotlari topilmadi")
+        return
+
+    page = self.context.new_page()
+
+    try:
+
+        print("[Finviz] Login boshlanmoqda...")
+
+        page.goto(
+            "https://finviz.com/login-email?remember=true",
+            wait_until="domcontentloaded"
+        )
+
+        page.wait_for_timeout(2000)
+
+        page.get_by_label("Email").fill(FINVIZ_EMAIL)
+
+        page.get_by_label("Password").fill(FINVIZ_PASSWORD)
+
+        page.get_by_role("button", name="Log in").click()
+
+        page.wait_for_load_state("networkidle")
+
+        print(f"[Finviz] URL: {page.url}")
+
+        if "login" in page.url.lower():
+            print("[Finviz] Login muvaffaqiyatsiz")
+        else:
+            print("[Finviz] Login muvaffaqiyatli ✅")
+
+    except Exception as e:
+        print(f"[Finviz] Login xatosi: {e}")
+
+    finally:
+        page.close()
 
     def new_page(self):
 
