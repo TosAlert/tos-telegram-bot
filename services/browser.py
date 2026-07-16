@@ -142,7 +142,7 @@ class BrowserManager:
 
     def login_finviz(self):
 
-    if not FINVIZ_EMAIL or not FINVIZ_PASSWORD:
+        if not FINVIZ_EMAIL or not FINVIZ_PASSWORD:
         print("[Finviz] Login ma'lumotlari topilmadi")
         return
 
