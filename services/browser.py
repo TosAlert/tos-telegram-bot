@@ -123,15 +123,31 @@ class BrowserManager:
 
             print(page.content()[:1000])
 
-            print("Email count:", page.locator('input[type="email"]').count())
-            print("Password count:", page.locator('input[type="password"]').count())
-            print("=" * 80)
+            inputs = page.locator("input")
 
-            page.locator('input[type="email"]').fill(FINVIZ_EMAIL)
-            page.locator('input[type="password"]').fill(FINVIZ_PASSWORD)
-            page.locator('button[type="submit"]').click()
+            print("Input count:", inputs.count())
 
-            page.wait_for_load_state("networkidle")
+            for i in range(inputs.count()):
+                inp = inputs.nth(i)
+                print(
+                    i,
+                    "type=", inp.get_attribute("type"),
+                    "name=", inp.get_attribute("name"),
+                    "id=", inp.get_attribute("id"),
+                    "placeholder=", inp.get_attribute("placeholder"),
+                    "autocomplete=", inp.get_attribute("autocomplete"),
+               )
+
+            try:
+                page.locator('input[type="email"]').fill(FINVIZ_EMAIL)
+                page.locator('input[type="password"]').fill(FINVIZ_PASSWORD)
+                page.locator('button[type="submit"]').click()
+
+                page.wait_for_load_state("networkidle")
+
+
+            except Exception as e:
+                print("Fill error:", e)
 
             if "login" in page.url.lower():
                 print("[Finviz] Login muvaffaqiyatsiz")
