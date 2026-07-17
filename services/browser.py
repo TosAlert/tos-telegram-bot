@@ -106,18 +106,32 @@ class BrowserManager:
 
             page.goto(
                 "https://finviz.com/login-email?remember=true",
-                wait_until="domcontentloaded"
+                wait_until="domcontentloaded",
+                timeout=60000
             )
 
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(5000)
+
+            print("=" * 80)
+            print("[Finviz] URL:", page.url)
+            print("[Finviz] TITLE:", page.title())
+            
+            page.screenshot(path="/tmp/login_page.png", full_page=True)
+
+            with open("/tmp/login.html", "w", encoding="utf-8") as f:
+                f.write(page.content())
+
+            print(page.content()[:1000])
+
+            print("Email count:", page.locator('input[type="email"]').count())
+            print("Password count:", page.locator('input[type="password"]').count())
+            print("=" * 80)
 
             page.locator('input[type="email"]').fill(FINVIZ_EMAIL)
             page.locator('input[type="password"]').fill(FINVIZ_PASSWORD)
             page.locator('button[type="submit"]').click()
 
             page.wait_for_load_state("networkidle")
-
-            print(f"[Finviz] URL: {page.url}")
 
             if "login" in page.url.lower():
                 print("[Finviz] Login muvaffaqiyatsiz")
