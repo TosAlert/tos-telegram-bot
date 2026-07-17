@@ -13,7 +13,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
-from services.chart import get_chart
+from services.chart import get_chart, get_chart_and_info
 from PIL import Image
 from PIL import ImageEnhance
 import io
@@ -45,6 +45,34 @@ def save_sent_id(msg_id: str):
         f.write(msg_id + "\n")
 
 ALREADY_SENT = load_sent_ids()
+
+# ── Finviz matnli qiymatlarni raqamga o'girish ───────────────────────────────
+def _parse_finviz_number(s: str) -> float:
+    """'1.23M', '4.5B', '850.30K', '12.34' kabi matnlarni floatga o'giradi."""
+    if not s or s in ("-", "N/A"):
+        return 0.0
+    s = s.strip().replace(",", "").replace("%", "").replace("+", "")
+    mult = 1
+    if s.endswith("B"):
+        mult, s = 1_000_000_000, s[:-1]
+    elif s.endswith("M"):
+        mult, s = 1_000_000, s[:-1]
+    elif s.endswith("K"):
+        mult, s = 1_000, s[:-1]
+    try:
+        return float(s) * mult
+    except Exception:
+        return 0.0
+
+def _parse_finviz_price(s: str) -> float:
+    """Narx matnidan (masalan '$59.82' yoki '59.82') raqam ajratadi."""
+    if not s:
+        return 0.0
+    s = re.sub(r"[^\d.\-]", "", s)
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
 
 # ── Finviz grafik (proksi orqali) ────────────────────────────────────────────
 SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "25a1884447a69ac9773958347c108f59")
@@ -196,25 +224,53 @@ def calc_macd(closes: pd.Series) -> str:
     except Exception:
         return "N/A"
 
-# ── Yahoo Finance ─────────────────────────────────────────────────────────────
-def get_stock_info(ticker: str) -> dict:
+# ── Ma'lumot: Finviz (asosiy) + Yahoo Finance (RSI/MACD/S-R va zaxira) ───────
+def get_stock_info(ticker: str, finviz_data: dict = None) -> dict:
+    """
+    finviz_data berilsa (parse_finviz_info natijasi), narx/hajm/sektor/company
+    o'shandan olinadi. RSI, MACD, Support/Resistance har doim Yahoo Finance
+    tarixiy narxlaridan hisoblanadi (Finviz sahifasida bu ma'lumot yo'q).
+    finviz_data bo'sh/yaroqsiz bo'lsa — hammasi Yahoo Finance'dan olinadi (zaxira).
+    """
+    price = change_pct = volume = avg_vol = rvol = market_cap = 0.0
+    sector = "N/A"
+    company = ticker
+
+    # 1) Finviz'dan asosiy ma'lumotlar
+    if finviz_data:
+        price      = _parse_finviz_price(finviz_data.get("price", ""))
+        change_pct = _parse_finviz_number(finviz_data.get("change_pct", ""))
+        volume     = _parse_finviz_number(finviz_data.get("volume", ""))
+        avg_vol    = _parse_finviz_number(finviz_data.get("avg_volume", ""))
+        market_cap = _parse_finviz_number(finviz_data.get("market_cap", ""))
+        sector     = finviz_data.get("sector") or "N/A"
+        company    = finviz_data.get("company") or ticker
+        rvol       = round(volume / avg_vol, 2) if avg_vol else 0.0
+        if price:
+            print(f"[Finviz] {ticker} ma'lumotlar Finviz'dan olindi (price=${price})")
+
+    # 2) Yahoo Finance — RSI/MACD/S-R uchun har doim kerak, va Finviz
+    #    ma'lumot bermagan bo'lsa narx/hajm uchun ham zaxira bo'ladi
+    rsi, macd_trend, support, resistance = 0.0, "N/A", 0.0, 0.0
     try:
         stock = yf.Ticker(ticker)
-        info  = stock.info
 
-        price = float(
-            info.get("currentPrice") or
-            info.get("regularMarketPrice") or
-            info.get("navPrice") or 0.0
-        )
-        prev_close = float(info.get("previousClose") or info.get("regularMarketPreviousClose") or 0.0)
-        change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
-        volume     = int(info.get("volume") or info.get("regularMarketVolume") or 0)
-        avg_vol    = int(info.get("averageVolume") or 0)
-        rvol       = round(volume / avg_vol, 2) if avg_vol else 0.0
-        market_cap = info.get("marketCap") or 0
-        sector     = info.get("sector") or "N/A"
-        company    = info.get("longName") or info.get("shortName") or ticker
+        if not price:
+            info = stock.info
+            price = float(
+                info.get("currentPrice") or
+                info.get("regularMarketPrice") or
+                info.get("navPrice") or 0.0
+            )
+            prev_close = float(info.get("previousClose") or info.get("regularMarketPreviousClose") or 0.0)
+            change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
+            volume     = int(info.get("volume") or info.get("regularMarketVolume") or 0)
+            avg_vol    = int(info.get("averageVolume") or 0)
+            rvol       = round(volume / avg_vol, 2) if avg_vol else 0.0
+            market_cap = info.get("marketCap") or 0
+            sector     = info.get("sector") or sector
+            company    = info.get("longName") or info.get("shortName") or company
+            print(f"[Yahoo] {ticker} ma'lumotlar Yahoo Finance'dan olindi (zaxira)")
 
         hist = stock.history(period="1y")
         if not hist.empty:
@@ -223,19 +279,19 @@ def get_stock_info(ticker: str) -> dict:
             macd_trend = calc_macd(closes)
             support    = round(float(hist["Low"].min()), 2)
             resistance = round(float(hist["High"].max()), 2)
-        else:
-            rsi, macd_trend, support, resistance = 0.0, "N/A", 0.0, 0.0
-
-        return {
-            "company": company, "sector": sector,
-            "price": price, "change_pct": change_pct,
-            "volume": volume, "avg_volume": avg_vol, "rvol": rvol,
-            "market_cap": market_cap, "rsi": rsi,
-            "macd_trend": macd_trend, "support": support, "resistance": resistance,
-        }
     except Exception as e:
         print(f"[Yahoo xato] {ticker}: {e}")
+
+    if not price:
         return {}
+
+    return {
+        "company": company, "sector": sector,
+        "price": price, "change_pct": change_pct,
+        "volume": volume, "avg_volume": avg_vol, "rvol": rvol,
+        "market_cap": market_cap, "rsi": rsi,
+        "macd_trend": macd_trend, "support": support, "resistance": resistance,
+    }
 
 def format_number(n) -> str:
     n = float(n or 0)
@@ -254,8 +310,8 @@ def is_strong_signal(d: dict) -> tuple:
     return (False, " | ".join(reasons)) if reasons else (True, "OK")
 
 # ── Xabar yasash ──────────────────────────────────────────────────────────────
-def build_message(ticker: str, scanner_name: str) -> tuple:
-    d = get_stock_info(ticker)
+def build_message(ticker: str, scanner_name: str, finviz_data: dict = None) -> tuple:
+    d = get_stock_info(ticker, finviz_data)
     if not d or d["price"] == 0:
         return "", False, "Ma'lumot olinmadi"
 
@@ -288,41 +344,39 @@ def build_message(ticker: str, scanner_name: str) -> tuple:
     return msg, True, "OK"
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
-def get_chart_image(ticker: str) -> bytes | None:
-    img = get_chart(ticker)
-    
+def process_ticker_and_send(ticker: str, scanner_name: str):
+    """
+    Bitta Finviz sahifa ochilishidan HAM grafik, HAM matnli ma'lumotlarni oladi,
+    filtrlaydi va Telegram'ga yuboradi.
+    """
+    img, finviz_data = get_chart_and_info(ticker)
+
+    caption, passed, reason = build_message(ticker, scanner_name, finviz_data)
+    if not passed:
+        print(f"[Filter] {ticker} o'tmadi: {reason}")
+        return
+
+    img_bytes = None
     if img:
         try:
             image = Image.open(io.BytesIO(img))
-            
-            # 2x kattalashtirish
             image = image.resize(
-            (image.width * 2, image.height * 2),
-            Image.LANCZOS,
+                (image.width * 2, image.height * 2),
+                Image.LANCZOS,
             )
-
-            # Sharpness
             image = ImageEnhance.Sharpness(image).enhance(1.4)
-
-            # Contrast
             image = ImageEnhance.Contrast(image).enhance(1.05)
-
             output = io.BytesIO()
             image.save(output, format="PNG", optimize=True)
-        
+            img_bytes = output.getvalue()
             print(f"[Chart] Finviz HD OK: {ticker}")
-        
-            return output.getvalue()
-
         except Exception as e:
             print(f"[Chart] Pillow error: {e}")
-            return img
+            img_bytes = img
 
-    print("[Chart] Fallback → matplotlib")
-    return get_matplotlib_chart(ticker)
-
-def send_telegram_photo(caption: str, ticker: str):
-    img_bytes = get_chart_image(ticker)
+    if not img_bytes:
+        print("[Chart] Fallback → matplotlib")
+        img_bytes = get_matplotlib_chart(ticker)
 
     if img_bytes:
         try:
@@ -339,7 +393,6 @@ def send_telegram_photo(caption: str, ticker: str):
         except Exception as e:
             print(f"[Telegram xato] {e}")
 
-    # Grafik chiqmasa — matn yuboradi
     send_telegram_text(caption)
 
 def send_telegram_text(text: str):
@@ -422,12 +475,7 @@ def check_email():
                     tickers = [t.strip().rstrip('.') for t in raw_tickers.split(",") if re.match(r"^[A-Z]{1,5}$", t.strip().rstrip('.'))]
                     print(f"[Following] Scanner: '{scanner_name}', Tickers: {tickers}")
                     for ticker in tickers:
-                        caption, passed, reason = build_message(ticker, scanner_name)
-                        if not passed:
-                            print(f"[Filter] {ticker} o'tmadi: {reason}")
-                            continue
-                        send_telegram_photo(caption, ticker)
-                        print(f"[Telegram] {ticker} yuborildi ✅")
+                        process_ticker_and_send(ticker, scanner_name)
                         time.sleep(2)
                     ALREADY_SENT.add(msg_id)
                     save_sent_id(msg_id)
@@ -438,12 +486,7 @@ def check_email():
             tickers, scanner_name = extract_tickers_and_scanner(subject, body)
 
             for ticker in tickers:
-                caption, passed, reason = build_message(ticker, scanner_name)
-                if not passed:
-                    print(f"[Filter] {ticker} o'tmadi: {reason}")
-                    continue
-                send_telegram_photo(caption, ticker)
-                print(f"[Telegram] {ticker} yuborildi ✅")
+                process_ticker_and_send(ticker, scanner_name)
                 time.sleep(2)
 
             ALREADY_SENT.add(msg_id)
