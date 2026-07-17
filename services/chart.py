@@ -4,7 +4,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from playwright.sync_api import Error, TimeoutError
 from services.browser import browser_manager
 
-FINVIZ_URL = "https://finviz.com/quote.ashx?t={ticker}&p=d&r=m6"
+FINVIZ_URL = "https://elite.finviz.com/stock?t={ticker}&p=d&r=prev_0-4-0"
 
 BLOCKED_DOMAINS = [
     "doubleclick.net", "googlesyndication", "google-analytics",
