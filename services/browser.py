@@ -45,3 +45,34 @@ def login_finviz(self):
 
     finally:
         page.close()
+
+def new_page(self):
+    if self.context is None:
+        self.start()
+
+    page = self.context.new_page()
+    page.set_viewport_size({"width": 1600, "height": 1200})
+
+    page.set_extra_http_headers({
+        "Accept-Language": "en-US,en;q=0.9"
+
+    })
+
+    return page
+
+    def close(self):
+        try:
+            if self.context:
+                self.context.close()
+            if self.browser:
+                self.browser.close()
+            if self.playwright:
+                self.playwright.stop()
+        except Exception:
+            pass
+            
+        self.context = None
+        self.browser = None
+        self.playwright = None
+
+browser_manager = BrowserManager()
