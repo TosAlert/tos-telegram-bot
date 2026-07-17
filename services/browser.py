@@ -111,9 +111,9 @@ class BrowserManager:
 
             page.wait_for_timeout(2000)
 
-            page.get_by_label("Email").fill(FINVIZ_EMAIL)
-            page.get_by_label("Password").fill(FINVIZ_PASSWORD)
-            page.get_by_role("button", name="Log in").click()
+            page.locator('input[type="email"]').fill(FINVIZ_EMAIL)
+            page.locator('input[type="password"]').fill(FINVIZ_PASSWORD)
+            page.locator('button[type="submit"]').click()
 
             page.wait_for_load_state("networkidle")
 
