@@ -139,8 +139,8 @@ class BrowserManager:
                )
 
             try:
-                page.locator('input[type="email"]').fill(FINVIZ_EMAIL)
-                page.locator('input[type="password"]').fill(FINVIZ_PASSWORD)
+                page.locator('input[autocomplete="username"]').fill(FINVIZ_EMAIL)
+                page.locator('input[name="password"]').fill(FINVIZ_PASSWORD)
                 page.locator('button[type="submit"]').click()
 
                 page.wait_for_load_state("networkidle")
