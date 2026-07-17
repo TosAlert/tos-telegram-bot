@@ -577,6 +577,64 @@ class ChartDownloader:
             return None
 
 
+def get_chart_and_info(ticker):
+    """
+    Bitta Finviz sahifa ochilishidan HAM grafik, HAM matnli ma'lumotlarni oladi.
+    Qaytaradi: (img_bytes, info_dict)
+    """
+    page = None
+    try:
+        downloader = ChartDownloader()
+        page = downloader._open_page(ticker)
+
+        info = downloader.parse_finviz_info(page)
+        img  = downloader._capture_chart(page)
+
+        if img:
+            print(f"[Chart] Finviz OK : {ticker}")
+
+        return img, info
+
+    except TimeoutError as e:
+        print(f"[Chart] Timeout : {e}")
+    except Error as e:
+        print(f"[Chart] Playwright Error : {e}")
+    except Exception as e:
+        print(f"[Chart] Error : {e}")
+    finally:
+        try:
+            if page:
+                page.close()
+        except Exception:
+            pass
+
+    # Qayta urinish (toza sahifa bilan)
+    page = None
+    try:
+        print(f"[Chart] Qayta urinish : {ticker}")
+        downloader = ChartDownloader()
+        page = downloader._open_page(ticker)
+
+        info = downloader.parse_finviz_info(page)
+        img  = downloader._capture_chart(page)
+
+        if img:
+            print(f"[Chart] Qayta urinishda OK : {ticker}")
+
+        return img, info
+
+    except Exception as e:
+        print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}")
+    finally:
+        try:
+            if page:
+                page.close()
+        except Exception:
+            pass
+
+    return None, None
+
+
 def get_chart(ticker):
     page = None
     try:
