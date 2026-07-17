@@ -110,55 +110,40 @@ class BrowserManager:
                 timeout=60000
             )
 
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(3000)
 
-            print("=" * 80)
-            print("[Finviz] URL:", page.url)
-            print("[Finviz] TITLE:", page.title())
-            
-            page.screenshot(path="/tmp/login_page.png", full_page=True)
+            # Agar allaqachon login bo'lgan bo'lsa
+            if "login" not in page.url.lower():
+                print("[Finviz] Allaqachon login qilingan ✅")
+                return
 
-            with open("/tmp/login.html", "w", encoding="utf-8") as f:
-                f.write(page.content())
+            email = page.locator('input[autocomplete="username"]')
+            password = page.locator('input[name="password"]')
+            submit = page.locator('button[type="submit"]')
 
-            print(page.content()[:1000])
+            email.wait_for(state="visible", timeout=10000)
+            password.wait_for(state="visible", timeout=10000)
 
-            inputs = page.locator("input")
+            email.fill(FINVIZ_EMAIL)
+            password.fill(FINVIZ_PASSWORD)
 
-            print("Input count:", inputs.count())
+            submit.click()
 
-            for i in range(inputs.count()):
-                inp = inputs.nth(i)
-                print(
-                    i,
-                    "type=", inp.get_attribute("type"),
-                    "name=", inp.get_attribute("name"),
-                    "id=", inp.get_attribute("id"),
-                    "placeholder=", inp.get_attribute("placeholder"),
-                    "autocomplete=", inp.get_attribute("autocomplete"),
-               )
-
-            try:
-                page.locator('input[autocomplete="username"]').fill(FINVIZ_EMAIL)
-                page.locator('input[name="password"]').fill(FINVIZ_PASSWORD)
-                page.locator('button[type="submit"]').click()
-
-                page.wait_for_load_state("networkidle")
-
-
-            except Exception as e:
-                print("Fill error:", e)
+            # Login tugashini kutish
+            page.wait_for_timeout(4000)
 
             if "login" in page.url.lower():
-                print("[Finviz] Login muvaffaqiyatsiz")
+                print("[Finviz] Login muvaffaqiyatsiz ❌")
+
             else:
                 print("[Finviz] Login muvaffaqiyatli ✅")
+                print(f"[Finviz] URL: {page.url}")
 
-        except Exception as e:
-            print(f"[Finviz] Login xatosi: {e}")
+            except Exception as e:
+                print(f"[Finviz] Login xatosi: {e}")
 
-        finally:
-            page.close()
+            finally:
+                page.close()
 
     def new_page(self):
         if self.context is None:
