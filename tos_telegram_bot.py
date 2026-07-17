@@ -346,14 +346,31 @@ def build_message(ticker: str, scanner_name: str, finviz_data: dict = None) -> t
 # ── Telegram ─────────────────────────────────────────────────────────────────
 def process_ticker_and_send(ticker: str, scanner_name: str):
     """
-    Bitta Finviz sahifa ochilishidan HAM grafik, HAM matnli ma'lumotlarni oladi,
-    filtrlaydi va Telegram'ga yuboradi.
+    1) Avval Yahoo Finance orqali TEZ RVol/RSI oldindan tekshiradi.
+       Filtrdan o'tmasa — Finviz'ga umuman murojaat qilinmaydi (vaqt tejaladi).
+    2) Filtrdan o'tsa, Finviz sahifasi ochilib, HAM grafik, HAM aniq
+       matnli ma'lumotlar (narx, sektor, hajm) olinadi.
+    3) Yakuniy xabar shu Finviz ma'lumotlari bilan yasaladi va yuboriladi.
     """
+    # 1) Tezkor oldindan tekshiruv — faqat Yahoo Finance orqali
+    pre_data = get_stock_info(ticker)
+    if not pre_data or pre_data.get("price", 0) == 0:
+        print(f"[Filter] {ticker}: dastlabki ma'lumot olinmadi, o'tkazib yuborildi")
+        return
+
+    passed, reason = is_strong_signal(pre_data)
+    if not passed:
+        print(f"[Filter] {ticker} o'tmadi (Yahoo tekshiruvi): {reason}")
+        return
+
+    # 2) Filtrdan o'tdi — endi Finviz'dan grafik + aniq ma'lumot olamiz
     img, finviz_data = get_chart_and_info(ticker)
 
     caption, passed, reason = build_message(ticker, scanner_name, finviz_data)
     if not passed:
-        print(f"[Filter] {ticker} o'tmadi: {reason}")
+        # Finviz ma'lumoti asosida qayta tekshirilganda ham o'tmasligi mumkin
+        # (masalan Finviz narxi biroz farq qilsa), lekin bu kamdan-kam holat
+        print(f"[Filter] {ticker} o'tmadi (Finviz tekshiruvi): {reason}")
         return
 
     img_bytes = None
