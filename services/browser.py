@@ -139,11 +139,11 @@ class BrowserManager:
                 print("[Finviz] Login muvaffaqiyatli ✅")
                 print(f"[Finviz] URL: {page.url}")
 
-            except Exception as e:
-                print(f"[Finviz] Login xatosi: {e}")
+    except Exception as e:
+        print(f"[Finviz] Login xatosi: {e}")        
 
-            finally:
-                page.close()
+    finally:
+        page.close()        
 
     def new_page(self):
         if self.context is None:
