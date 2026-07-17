@@ -17,6 +17,7 @@ from services.chart import get_chart, get_chart_and_info
 from PIL import Image
 from PIL import ImageEnhance
 import io
+import csv
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 FINVIZ_EMAIL     = os.getenv("FINVIZ_EMAIL")
 FINVIZ_PASSWORD  = os.getenv("FINVIZ_PASSWORD")
+FINVIZ_API_TOKEN = os.getenv("FINVIZ_API_TOKEN")
 
 TOS_SENDER       = "alerts@thinkorswim.com"
 CHECK_INTERVAL   = 30
@@ -45,6 +47,60 @@ def save_sent_id(msg_id: str):
         f.write(msg_id + "\n")
 
 ALREADY_SENT = load_sent_ids()
+
+# ── Finviz Export API (CSV) — brauzersiz, tez ma'lumot olish ────────────────
+# Ustunlar: Ticker, Company, Sector, Industry, Price, Change, Volume,
+#           Avg Volume, Market Cap, RSI (14)
+FINVIZ_EXPORT_COLUMNS = "0,1,3,4,6,65,66,67,68,71"
+FINVIZ_EXPORT_URL = "https://elite.finviz.com/export.ashx"
+
+def get_finviz_export_data(ticker: str) -> dict:
+    """
+    Finviz Export API (CSV) orqali ticker ma'lumotlarini oladi.
+    Brauzer ochmaydi — oddiy HTTP so'rov, juda tez.
+    """
+    if not FINVIZ_API_TOKEN:
+        print("[Finviz Export] FINVIZ_API_TOKEN o'rnatilmagan")
+        return {}
+
+    params = {
+        "v": "111",
+        "t": ticker.upper(),
+        "c": FINVIZ_EXPORT_COLUMNS,
+        "auth": FINVIZ_API_TOKEN,
+    }
+
+    try:
+        resp = requests.get(FINVIZ_EXPORT_URL, params=params, timeout=15)
+        resp.raise_for_status()
+
+        text = resp.text.strip()
+        if not text or "ticker" not in text.lower():
+            print(f"[Finviz Export] {ticker}: bo'sh yoki noto'g'ri javob")
+            return {}
+
+        reader = csv.DictReader(io.StringIO(text))
+        row = next(reader, None)
+        if not row:
+            print(f"[Finviz Export] {ticker}: qator topilmadi")
+            return {}
+
+        print(f"[Finviz Export] {ticker}: {row}")
+
+        return {
+            "company":    row.get("Company", ""),
+            "sector":     row.get("Sector", ""),
+            "industry":   row.get("Industry", ""),
+            "price":      row.get("Price", ""),
+            "change_pct": row.get("Change", ""),
+            "volume":     row.get("Volume", ""),
+            "avg_volume": row.get("Avg Volume", ""),
+            "market_cap": row.get("Market Cap", ""),
+            "rsi":        row.get("RSI (14)", ""),
+        }
+    except Exception as e:
+        print(f"[Finviz Export xato] {ticker}: {e}")
+        return {}
 
 # ── Finviz matnli qiymatlarni raqamga o'girish ───────────────────────────────
 def _parse_finviz_number(s: str) -> float:
@@ -225,6 +281,41 @@ def calc_macd(closes: pd.Series) -> str:
         return "N/A"
 
 # ── Ma'lumot: Finviz (asosiy) + Yahoo Finance (RSI/MACD/S-R va zaxira) ───────
+def quick_prefilter_check(ticker: str, export_data: dict) -> tuple:
+    """
+    Yengil, tez oldindan tekshiruv — faqat Finviz Export API'dan kelgan
+    RVol va RSI qiymatlariga asoslanadi. Yahoo Finance'ga umuman
+    murojaat qilmaydi (tez bo'lishi uchun).
+    Qaytaradi: (passed: bool, reason: str, price: float)
+    """
+    if not export_data:
+        return False, "Export ma'lumot yo'q", 0.0
+
+    price = _parse_finviz_price(export_data.get("price", ""))
+    if not price:
+        return False, "Narx topilmadi", 0.0
+
+    volume  = _parse_finviz_number(export_data.get("volume", ""))
+    avg_vol = _parse_finviz_number(export_data.get("avg_volume", ""))
+    rvol    = round(volume / avg_vol, 2) if avg_vol else 0.0
+
+    rsi_raw = export_data.get("rsi", "")
+    try:
+        rsi = float(str(rsi_raw).replace("%", "").strip()) if rsi_raw not in ("", "-", "N/A") else 0.0
+    except Exception:
+        rsi = 0.0
+
+    reasons = []
+    if rvol > 0 and rvol < MIN_RVOL:
+        reasons.append(f"RVol past ({rvol} < {MIN_RVOL})")
+    if rsi > 0 and (rsi < RSI_MIN or rsi > RSI_MAX):
+        reasons.append(f"RSI chegaradan ({rsi})")
+
+    if reasons:
+        return False, " | ".join(reasons), price
+
+    return True, "OK", price
+
 def get_stock_info(ticker: str, finviz_data: dict = None) -> dict:
     """
     finviz_data berilsa (parse_finviz_info natijasi), narx/hajm/sektor/company
@@ -346,22 +437,32 @@ def build_message(ticker: str, scanner_name: str, finviz_data: dict = None) -> t
 # ── Telegram ─────────────────────────────────────────────────────────────────
 def process_ticker_and_send(ticker: str, scanner_name: str):
     """
-    1) Avval Yahoo Finance orqali TEZ RVol/RSI oldindan tekshiradi.
-       Filtrdan o'tmasa — Finviz'ga umuman murojaat qilinmaydi (vaqt tejaladi).
+    1) Avval Finviz Export API (CSV, brauzersiz) orqali TEZ RVol/RSI
+       oldindan tekshiradi. Export API ishlamasa — Yahoo Finance'ga tushadi.
+       Filtrdan o'tmasa — brauzer (Finviz sahifa/grafik) umuman ochilmaydi.
     2) Filtrdan o'tsa, Finviz sahifasi ochilib, HAM grafik, HAM aniq
        matnli ma'lumotlar (narx, sektor, hajm) olinadi.
     3) Yakuniy xabar shu Finviz ma'lumotlari bilan yasaladi va yuboriladi.
     """
-    # 1) Tezkor oldindan tekshiruv — faqat Yahoo Finance orqali
-    pre_data = get_stock_info(ticker)
-    if not pre_data or pre_data.get("price", 0) == 0:
-        print(f"[Filter] {ticker}: dastlabki ma'lumot olinmadi, o'tkazib yuborildi")
-        return
+    # 1) Tezkor oldindan tekshiruv
+    export_data = get_finviz_export_data(ticker)
 
-    passed, reason = is_strong_signal(pre_data)
-    if not passed:
-        print(f"[Filter] {ticker} o'tmadi (Yahoo tekshiruvi): {reason}")
-        return
+    if export_data:
+        # Export API bor — yengil, tez tekshiruv (Yahoo'siz)
+        passed, reason, _price = quick_prefilter_check(ticker, export_data)
+        if not passed:
+            print(f"[Filter] {ticker} o'tmadi (Finviz Export tekshiruvi): {reason}")
+            return
+    else:
+        # Export API ishlamadi — Yahoo Finance orqali to'liq tekshiruv (zaxira)
+        pre_data = get_stock_info(ticker)
+        if not pre_data or pre_data.get("price", 0) == 0:
+            print(f"[Filter] {ticker}: dastlabki ma'lumot olinmadi, o'tkazib yuborildi")
+            return
+        passed, reason = is_strong_signal(pre_data)
+        if not passed:
+            print(f"[Filter] {ticker} o'tmadi (Yahoo tekshiruvi): {reason}")
+            return
 
     # 2) Filtrdan o'tdi — endi Finviz'dan grafik + aniq ma'lumot olamiz
     img, finviz_data = get_chart_and_info(ticker)
