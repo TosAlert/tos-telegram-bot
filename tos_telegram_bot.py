@@ -1,3 +1,9 @@
+DEBUG = False
+
+def log(*args, **kwargs):
+    if DEBUG:
+        print(*args, **kwargs)
+
 """
 TOS Alert → Telegram Bot (v5)
 Real-time Finviz screenshot + Yahoo Finance ma'lumotlari
@@ -73,12 +79,12 @@ def get_finviz_via_proxy(ticker: str) -> bytes | None:
             proxy_timeout = 40 if "scraperapi" in proxy_url else 20
             resp = requests.get(proxy_url, headers=headers, timeout=proxy_timeout)
             if resp.status_code == 200 and resp.content[:4] == b'\x89PNG':
-                print(f"[Finviz proksi #{i+1}] {ticker} grafigi olindi ({len(resp.content)} bayt)")
+                log(f"[Finviz proksi #{i+1}] {ticker} grafigi olindi ({len(resp.content)} bayt)")
                 return resp.content
             else:
-                print(f"[Finviz proksi #{i+1}] muvaffaqiyatsiz (status={resp.status_code}, size={len(resp.content)})")
+                log(f"[Finviz proksi #{i+1}] muvaffaqiyatsiz (status={resp.status_code}, size={len(resp.content)})")
         except Exception as e:
-            print(f"[Finviz proksi #{i+1} xato] {e}")
+            log(f"[Finviz proksi #{i+1} xato] {e}")
         time.sleep(0.3)
 
     return None
@@ -96,7 +102,7 @@ def get_matplotlib_chart(ticker: str) -> bytes | None:
         stock = yf.Ticker(ticker)
         hist  = stock.history(period="6mo")
         if hist.empty or len(hist) < 5:
-            print(f"[Chart] {ticker} data yoq")
+            log(f"[Chart] {ticker} data yoq")
             return None
 
         fig, (ax1, ax2) = plt.subplots(
@@ -163,10 +169,10 @@ def get_matplotlib_chart(ticker: str) -> bytes | None:
         buf.seek(0)
         img = buf.read()
         plt.close()
-        print(f"[Chart] {ticker} grafigi yaratildi ({len(img)//1024}KB)")
+        log(f"[Chart] {ticker} grafigi yaratildi ({len(img)//1024}KB)")
         return img
     except Exception as e:
-        print(f"[Chart xato] {ticker}: {e}")
+        log(f"[Chart xato] {ticker}: {e}")
         return None
 
 # ── Texnik indikatorlar ───────────────────────────────────────────────────────
@@ -234,7 +240,7 @@ def get_stock_info(ticker: str) -> dict:
             "macd_trend": macd_trend, "support": support, "resistance": resistance,
         }
     except Exception as e:
-        print(f"[Yahoo xato] {ticker}: {e}")
+        log(f"[Yahoo xato] {ticker}: {e}")
         return {}
 
 def format_number(n) -> str:
@@ -310,15 +316,15 @@ def get_chart_image(ticker: str) -> bytes | None:
             output = io.BytesIO()
             image.save(output, format="PNG", optimize=True)
         
-            print(f"[Chart] Finviz HD OK: {ticker}")
+            log(f"[Chart] Finviz HD OK: {ticker}")
         
             return output.getvalue()
 
         except Exception as e:
-            print(f"[Chart] Pillow error: {e}")
+            log(f"[Chart] Pillow error: {e}")
             return img
 
-    print("[Chart] Fallback → matplotlib")
+    log("[Chart] Fallback → matplotlib")
     return get_matplotlib_chart(ticker)
 
 def send_telegram_photo(caption: str, ticker: str):
@@ -333,11 +339,11 @@ def send_telegram_photo(caption: str, ticker: str):
                 timeout=90
             )
             if resp.ok:
-                print(f"[Telegram] {ticker} grafik bilan yuborildi ✅")
+                log(f"[Telegram] {ticker} grafik bilan yuborildi ✅")
                 return
-            print(f"[Telegram xato] {resp.text}")
+            log(f"[Telegram xato] {resp.text}")
         except Exception as e:
-            print(f"[Telegram xato] {e}")
+            log(f"[Telegram xato] {e}")
 
     # Grafik chiqmasa — matn yuboradi
     send_telegram_text(caption)
@@ -348,7 +354,7 @@ def send_telegram_text(text: str):
         "chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML",
     }, timeout=15)
     if not resp.ok:
-        print(f"[Telegram matn xato] {resp.text}")
+        log(f"[Telegram matn xato] {resp.text}")
 
 # ── Email parsing ─────────────────────────────────────────────────────────────
 def extract_tickers_and_scanner(subject: str, body: str):
@@ -368,7 +374,7 @@ def extract_tickers_and_scanner(subject: str, body: str):
         if m3:
             tickers = [t.strip() for t in m3.group(1).split(",") if re.match(r"^[A-Z]{1,5}$", t.strip())]
 
-    print(f"[Parser] Scanner: '{scanner_name}', Tickers: {tickers}")
+    log(f"[Parser] Scanner: '{scanner_name}', Tickers: {tickers}")
     return list(dict.fromkeys(tickers)), scanner_name
 
 # ── Email tekshirish ──────────────────────────────────────────────────────────
@@ -382,7 +388,7 @@ def check_email():
         since = datetime.now().strftime("%d-%b-%Y")
         _, data = mail.search(None, f'(UNSEEN FROM "{TOS_SENDER}" SINCE "{since}")')
         ids = data[0].split()
-        print(f"[Email] {len(ids)} ta yangi TOS alert")
+        log(f"[Email] {len(ids)} ta yangi TOS alert")
 
         for eid in ids:
             _, msg_data = mail.fetch(eid, "(RFC822)")
@@ -402,14 +408,14 @@ def check_email():
             else:
                 body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
 
-            print(f"[Email] Subject: {subject}")
+            log(f"[Email] Subject: {subject}")
 
             # "New symbol: X was added to Y" yoki "Following list of Y: X" formatlarini qabul qilamiz
             is_new_symbol = re.search(r"New symbols?\s*:", subject, re.IGNORECASE)
             is_following  = re.search(r"Following list", subject, re.IGNORECASE)
 
             if not is_new_symbol and not is_following:
-                print("[Skip] Noma'lum email formati")
+                log("[Skip] Noma'lum email formati")
                 continue
 
             # "Following list of SCANNER: TICKER1, TICKER2" formatidan ticker olish
@@ -420,19 +426,19 @@ def check_email():
                     scanner_name = m_follow.group(1).strip().rstrip()
                     raw_tickers  = m_follow.group(2)
                     tickers = [t.strip().rstrip('.') for t in raw_tickers.split(",") if re.match(r"^[A-Z]{1,5}$", t.strip().rstrip('.'))]
-                    print(f"[Following] Scanner: '{scanner_name}', Tickers: {tickers}")
+                    log(f"[Following] Scanner: '{scanner_name}', Tickers: {tickers}")
                     for ticker in tickers:
                         caption, passed, reason = build_message(ticker, scanner_name)
                         if not passed:
-                            print(f"[Filter] {ticker} o'tmadi: {reason}")
+                            log(f"[Filter] {ticker} o'tmadi: {reason}")
                             continue
                         send_telegram_photo(caption, ticker)
-                        print(f"[Telegram] {ticker} yuborildi ✅")
+                        log(f"[Telegram] {ticker} yuborildi ✅")
                         time.sleep(2)
                     ALREADY_SENT.add(msg_id)
                     save_sent_id(msg_id)
                 else:
-                    print(f"[Skip] Following list formati tanilmadi: {subject}")
+                    log(f"[Skip] Following list formati tanilmadi: {subject}")
                 continue
 
             tickers, scanner_name = extract_tickers_and_scanner(subject, body)
@@ -440,17 +446,17 @@ def check_email():
             for ticker in tickers:
                 caption, passed, reason = build_message(ticker, scanner_name)
                 if not passed:
-                    print(f"[Filter] {ticker} o'tmadi: {reason}")
+                    log(f"[Filter] {ticker} o'tmadi: {reason}")
                     continue
                 send_telegram_photo(caption, ticker)
-                print(f"[Telegram] {ticker} yuborildi ✅")
+                log(f"[Telegram] {ticker} yuborildi ✅")
                 time.sleep(2)
 
             ALREADY_SENT.add(msg_id)
             save_sent_id(msg_id)
 
     except Exception as e:
-        print(f"[Xato] {e}")
+        log(f"[Xato] {e}")
     finally:
         try:
             if mail:
@@ -460,11 +466,11 @@ def check_email():
 
 # ── Asosiy tsikl ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🚀 TOS → Telegram bot v5 ishga tushdi!")
-    print(f"   Gmail: {GMAIL_USER}")
-    print(f"   Kanal: {TELEGRAM_CHAT_ID}")
-    print(f"   Har {CHECK_INTERVAL}s tekshiradi...")
-    print(f"   Filter: RVol>={MIN_RVOL}, RSI {RSI_MIN}-{RSI_MAX}\n")
+    log("🚀 TOS → Telegram bot v5 ishga tushdi!")
+    log(f"   Gmail: {GMAIL_USER}")
+    log(f"   Kanal: {TELEGRAM_CHAT_ID}")
+    log(f"   Har {CHECK_INTERVAL}s tekshiradi...")
+    log(f"   Filter: RVol>={MIN_RVOL}, RSI {RSI_MIN}-{RSI_MAX}\n")
 
     while True:
         check_email()
