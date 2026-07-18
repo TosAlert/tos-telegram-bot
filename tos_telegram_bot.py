@@ -6,6 +6,7 @@ Real-time Finviz screenshot + Yahoo Finance ma'lumotlari
 import imaplib
 import email
 import time
+from imapclient import IMAPClient
 import re
 import os
 import requests
@@ -28,7 +29,8 @@ FINVIZ_EMAIL     = os.getenv("FINVIZ_EMAIL")
 FINVIZ_PASSWORD  = os.getenv("FINVIZ_PASSWORD")
 
 TOS_SENDER       = "alerts@thinkorswim.com"
-CHECK_INTERVAL   = 30
+IDLE_TIMEOUT     = 24 * 60   # 24 daqiqa — Gmail IDLE ulanishini shundan oldin yangilaymiz
+FALLBACK_POLL    = 600       # 10 daqiqada bir ehtiyot uchun tekshiruv (IDLE signalni oʻtkazib yuborsa)
 MIN_RVOL         = 1.0
 RSI_MIN          = 30
 RSI_MAX          = 80
@@ -458,14 +460,60 @@ def check_email():
         except Exception:
             pass
 
+# ── IMAP IDLE tsikli ──────────────────────────────────────────────────────────
+def imap_idle_loop():
+    """
+    Gmail'ga IMAP IDLE orqali ulanadi va yangi email kelishi bilan
+    DARHOL check_email() ni chaqiradi — polling shart emas, resurs tejaladi.
+    """
+    while True:
+        client = None
+        try:
+            client = IMAPClient("imap.gmail.com", ssl=True)
+            client.login(GMAIL_USER, GMAIL_APP_PASS)
+            client.select_folder("INBOX")
+            print("📡 IMAP IDLE rejimida kutilmoqda (email kelishi bilan darhol javob beradi)...")
+
+            last_poll = time.time()
+
+            while True:
+                client.idle()
+                try:
+                    responses = client.idle_check(timeout=IDLE_TIMEOUT)
+                finally:
+                    client.idle_done()
+
+                if responses:
+                    print(f"[IDLE] Yangi faoliyat aniqlandi -> tekshirilmoqda")
+                    check_email()
+                    last_poll = time.time()
+
+                # Ehtiyot uchun davriy tekshiruv (IDLE signal yo'qolib qolsa)
+                if time.time() - last_poll > FALLBACK_POLL:
+                    print("[IDLE] Ehtiyot uchun davriy tekshiruv")
+                    check_email()
+                    last_poll = time.time()
+
+        except Exception as e:
+            print(f"[IDLE xato] {e} -> 15s dan keyin qayta ulanamiz")
+            try:
+                if client:
+                    client.logout()
+            except Exception:
+                pass
+            time.sleep(15)
+
+
 # ── Asosiy tsikl ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🚀 TOS → Telegram bot v5 ishga tushdi!")
+    print("🚀 TOS → Telegram bot v6 (IMAP IDLE) ishga tushdi!")
     print(f"   Gmail: {GMAIL_USER}")
     print(f"   Kanal: {TELEGRAM_CHAT_ID}")
-    print(f"   Har {CHECK_INTERVAL}s tekshiradi...")
+    print(f"   Rejim: IMAP IDLE (real-time, polling yo'q)")
+    print(f"   Ehtiyot tekshiruvi: har {FALLBACK_POLL // 60} daqiqada")
     print(f"   Filter: RVol>={MIN_RVOL}, RSI {RSI_MIN}-{RSI_MAX}\n")
 
-    while True:
-        check_email()
-        time.sleep(CHECK_INTERVAL)
+    # Ishga tushganda darhol bir marta tekshirib qo'yamiz
+    check_email()
+
+    imap_idle_loop()
