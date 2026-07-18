@@ -12,6 +12,13 @@ BLOCKED_DOMAINS = [
     "criteo", "taboola", "outbrain", "adnxs.com", "adservice.google",
 ]
 
+
+DEBUG = False
+
+def log(*args, **kwargs):
+    if DEBUG:
+        log(*args, **kwargs)
+
 def _force_light_url(url):
     """Chart URL'idagi temani light ga majburlaydi."""
     if not url:
@@ -60,10 +67,10 @@ def _is_image_dark(img_bytes, threshold=90):
             r, g, b = px[:3]
             total += (r + g + b) / 3
         avg = total / len(points)
-        print(f"[Chart] Rasm fon yorqinligi: {avg:.0f} (threshold={threshold})")
+        log(f"[Chart] Rasm fon yorqinligi: {avg:.0f} (threshold={threshold})")
         return avg < threshold
     except Exception as e:
-        print(f"[Chart] Dark tekshirishda xato: {e}")
+        log(f"[Chart] Dark tekshirishda xato: {e}")
         return False
 
 
@@ -89,20 +96,20 @@ class ChartDownloader:
         try:
             page.route("**/*", _route_handler)
         except Exception as e:
-            print(f"[Chart] Route bloklashda xato: {e}")
+            log(f"[Chart] Route bloklashda xato: {e}")
 
     def _safe_click(self, page, locator, label):
         try:
             locator.scroll_into_view_if_needed(timeout=1500)
         except Exception:
-            print(f"[Chart] {label}: scroll_into_view timeout, davom etamiz")
+            log(f"[Chart] {label}: scroll_into_view timeout, davom etamiz")
 
         try:
             locator.click(timeout=4000, force=True)
-            print(f"[Chart] {label} bosildi (click)")
+            log(f"[Chart] {label} bosildi (click)")
             return
         except Exception as e:
-            print(f"[Chart] {label} click xato: {e}")
+            log(f"[Chart] {label} click xato: {e}")
 
         try:
             box = locator.bounding_box()
@@ -111,27 +118,27 @@ class ChartDownloader:
                 y = box["y"] + box["height"] / 2
                 page.mouse.move(x, y)
                 page.mouse.click(x, y)
-                print(f"[Chart] {label} bosildi (mouse coord)")
+                log(f"[Chart] {label} bosildi (mouse coord)")
                 return
         except Exception as e:
-            print(f"[Chart] {label} mouse click xato: {e}")
+            log(f"[Chart] {label} mouse click xato: {e}")
 
         try:
             locator.evaluate("el => el.click()")
-            print(f"[Chart] {label} bosildi (JS click)")
+            log(f"[Chart] {label} bosildi (JS click)")
         except Exception as e:
-            print(f"[Chart] {label} JS click ham xato: {e}")
+            log(f"[Chart] {label} JS click ham xato: {e}")
             raise
 
     def _open_page(self, ticker):
         page = browser_manager.new_page()
         self._block_ads(page)
 
-        print(f"[Chart] Page id: {id(page)}")
-        print(f"[Chart] Opening {ticker}")
+        log(f"[Chart] Page id: {id(page)}")
+        log(f"[Chart] Opening {ticker}")
 
         url = FINVIZ_URL.format(ticker=ticker.upper())
-        print(f"[Chart] URL: {url}")
+        log(f"[Chart] URL: {url}")
 
         try:
             page.context.add_cookies([
@@ -141,12 +148,12 @@ class ChartDownloader:
                 {"name": "charts", "value": "light", "domain": ".finviz.com", "path": "/"},
             ])
         except Exception as e:
-            print(f"[Chart] Cookie sozlashda xato: {e}")
+            log(f"[Chart] Cookie sozlashda xato: {e}")
 
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
         except TimeoutError:
-            print("[Chart] First timeout -> retry")
+            log("[Chart] First timeout -> retry")
             page.goto(url, wait_until="commit", timeout=30000)
 
         page.set_viewport_size({
@@ -221,7 +228,7 @@ class ChartDownloader:
         page.wait_for_timeout(300)
 
         title = page.title()
-        print(f"[Chart] Title : {title}")
+        log(f"[Chart] Title : {title}")
 
         if ticker.upper() not in title.upper():
             raise Exception(f"Unexpected Finviz page : {title}")
@@ -301,12 +308,12 @@ class ChartDownloader:
             }
             """)
 
-            print(f"[Finviz] {data}")
+            log(f"[Finviz] {data}")
 
             return data
 
         except Exception as e:
-            print(f"[Finviz Parser] {e}")
+            log(f"[Finviz Parser] {e}")
 
             return {
                 "company": "",
@@ -344,9 +351,9 @@ class ChartDownloader:
 
         try:
             page.wait_for_selector('text="Share Chart"', timeout=5000)
-            print("[Chart] 'Share Chart' modal topildi")
+            log("[Chart] 'Share Chart' modal topildi")
         except Exception:
-            print("[Chart] 'Share Chart' matni topilmadi, davom etamiz")
+            log("[Chart] 'Share Chart' matni topilmadi, davom etamiz")
 
         page.wait_for_timeout(1500)
 
@@ -378,7 +385,7 @@ class ChartDownloader:
                 if loc.count() > 0:
                     loc.wait_for(state="visible", timeout=3000)
                     download_btn = loc
-                    print(f"[Chart] Download tugma topildi: {sel}")
+                    log(f"[Chart] Download tugma topildi: {sel}")
                     break
             except Exception:
                 continue
@@ -442,21 +449,21 @@ class ChartDownloader:
         if src_url and "theme=dark" in src_url.lower():
             light_url = _force_light_url(src_url)
             if light_url and light_url != src_url:
-                print(f"[Chart] Dark chart URL topildi, light ga o'zgartirildi:\n  {light_url}")
+                log(f"[Chart] Dark chart URL topildi, light ga o'zgartirildi:\n  {light_url}")
                 try:
                     resp = page.request.get(light_url, timeout=15000)
                     if resp.ok:
                         body = resp.body()
                         if body and len(body) > 1000:
                             img_bytes = body
-                            print("[Chart] Light versiya URL orqali yuklandi")
+                            log("[Chart] Light versiya URL orqali yuklandi")
                 except Exception as e:
-                    print(f"[Chart] Light URL yuklashda xato: {e}")
+                    log(f"[Chart] Light URL yuklashda xato: {e}")
 
         if not img_bytes:
             raise Exception("Download rasmi olinmadi")
 
-        print(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
+        log(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
 
         try:
             close_btn = page.locator(
@@ -472,7 +479,7 @@ class ChartDownloader:
     def _resize_to_target_ratio(self, img_bytes, target_ratio=12 / 7):
         """
         Rasmni berilgan en:bo'y nisbatiga moslaydi. Finviz rasmi juda keng
-        chiqadi — kenglikni markazdan kesib (crop), grafik mazmuni ramkani
+        chiqadi â kenglikni markazdan kesib (crop), grafik mazmuni ramkani
         to'liq to'ldiradigan qilamiz.
         """
         from PIL import Image
@@ -494,7 +501,7 @@ class ChartDownloader:
         out = _io.BytesIO()
         img.save(out, format="PNG")
         result = out.getvalue()
-        print(f"[Chart] Qayta o'lchamlandi: {w}x{h} -> {img.size[0]}x{img.size[1]}")
+        log(f"[Chart] Qayta o'lchamlandi: {w}x{h} -> {img.size[0]}x{img.size[1]}")
         return result
 
     def _find_chart(self, page):
@@ -511,7 +518,7 @@ class ChartDownloader:
                 locator.wait_for(state="visible", timeout=2000)
                 box = locator.bounding_box()
                 if box and box["width"] > 400 and box["height"] > 250:
-                    print(f"[Chart] Found container: {selector}")
+                    log(f"[Chart] Found container: {selector}")
                     return locator
             except Exception:
                 pass
@@ -527,7 +534,7 @@ class ChartDownloader:
             try:
                 locator = page.locator(selector).first
                 locator.wait_for(state="visible", timeout=2000)
-                print(f"[Chart] Found : {selector}")
+                log(f"[Chart] Found : {selector}")
                 return locator
             except Exception:
                 pass
@@ -540,9 +547,9 @@ class ChartDownloader:
             if img:
                 return img
         except Exception as e:
-            print(f"[Chart] Share->Download muvaffaqiyatsiz: {e}")
+            log(f"[Chart] Share->Download muvaffaqiyatsiz: {e}")
 
-        print("[Chart] Zaxira usul: screenshot")
+        log("[Chart] Zaxira usul: screenshot")
 
         chart = self._find_chart(page)
 
@@ -550,30 +557,30 @@ class ChartDownloader:
             try:
                 box = chart.bounding_box()
                 if box:
-                    print(f"[Chart] Size : {int(box['width'])}x{int(box['height'])}")
+                    log(f"[Chart] Size : {int(box['width'])}x{int(box['height'])}")
                     if box["width"] < 400 or box["height"] < 200:
-                        print("[Chart] Element too small, page screenshot ga o'tamiz")
+                        log("[Chart] Element too small, page screenshot ga o'tamiz")
                         raise ValueError("Element too small")
 
                 img = chart.screenshot(type="png")
                 if _is_image_dark(img):
-                    print("[Chart] ⚠️ Screenshot ham dark, page screenshot ga o'tamiz")
+                    log("[Chart] â ï¸ Screenshot ham dark, page screenshot ga o'tamiz")
                     raise ValueError("Screenshot dark")
-                print(f"[Chart] Chart screenshot OK ({len(img)//1024} KB)")
+                log(f"[Chart] Chart screenshot OK ({len(img)//1024} KB)")
                 return img
             except Exception as e:
-                print(f"[Chart] Canvas screenshot failed : {e}")
+                log(f"[Chart] Canvas screenshot failed : {e}")
 
-        print("[Chart] Canvas topilmadi -> Page screenshot")
+        log("[Chart] Canvas topilmadi -> Page screenshot")
         try:
             img = page.screenshot(
                 clip={"x": 0, "y": 140, "width": 1600, "height": 850},
                 type="png",
             )
-            print(f"[Chart] Page screenshot OK ({len(img)//1024} KB)")
+            log(f"[Chart] Page screenshot OK ({len(img)//1024} KB)")
             return img
         except Exception as e:
-            print(f"[Chart] Page screenshot ham muvaffaqiyatsiz: {e}")
+            log(f"[Chart] Page screenshot ham muvaffaqiyatsiz: {e}")
             return None
 
 
