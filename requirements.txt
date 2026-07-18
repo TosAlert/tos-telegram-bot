@@ -5,3 +5,4 @@ pandas
 matplotlib
 Pillow
 playwright==1.61.0
+imapclient
