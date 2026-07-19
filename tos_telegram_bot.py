@@ -382,9 +382,13 @@ def check_email():
         mail.select("inbox")
 
         since = datetime.now().strftime("%d-%b-%Y")
-        _, data = mail.search(None, f'(UNSEEN FROM "{TOS_SENDER}" SINCE "{since}")')
+        # DIQQAT: UNSEEN olib tashlandi — boshqa dastur (masalan Gmail Bot)
+        # emailni "o'qilgan" deb belgilab qo'yishi mumkin, shunda UNSEEN
+        # qidiruv uni topolmay qoladi. Endi dublikatlarni faqat o'zimizning
+        # ALREADY_SENT (sent_ids.txt) orqali nazorat qilamiz.
+        _, data = mail.search(None, f'(FROM "{TOS_SENDER}" SINCE "{since}")')
         ids = data[0].split()
-        print(f"[Email] {len(ids)} ta yangi TOS alert")
+        print(f"[Email] {len(ids)} ta email topildi (jami, SEEN/UNSEEN farqisiz)")
 
         for eid in ids:
             _, msg_data = mail.fetch(eid, "(RFC822)")
@@ -485,6 +489,13 @@ def imap_idle_loop():
 
                 if responses:
                     print(f"[IDLE] Yangi faoliyat aniqlandi -> tekshirilmoqda")
+                    # Gmail'ning IMAP SEARCH indeksi bir necha soniya kechikishi
+                    # mumkin, shuning uchun darhol emas, ozgina kutib tekshiramiz
+                    time.sleep(3)
+                    check_email()
+                    # Ehtiyot uchun 5s dan keyin yana bir bor tekshiramiz —
+                    # agar birinchi safar hali indekslanmagan bo'lsa ham tutib olamiz
+                    time.sleep(5)
                     check_email()
                     last_poll = time.time()
 
