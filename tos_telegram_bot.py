@@ -48,6 +48,26 @@ def save_sent_id(msg_id: str):
 
 ALREADY_SENT = load_sent_ids()
 
+# ── Ticker cooldown ────────────────────────────────────────────────────────
+# TOS ba'zan bir xil ticker uchun scanner qayta ishga tushganda YANGI,
+# alohida email yuboradi (Message-ID/UID farqli). Email darajasidagi dedup
+# buni "yangi" deb hisoblaydi. Shuning uchun ticker+scanner darajasida
+# qo'shimcha cooldown qo'yamiz — bir xil kombinatsiya belgilangan vaqt
+# ichida qayta Telegram'ga yuborilmaydi.
+TICKER_COOLDOWN_MIN = 30
+_last_sent_ticker = {}
+
+def _ticker_recently_sent(ticker: str, scanner_name: str) -> bool:
+    key = f"{ticker}|{scanner_name}"
+    last = _last_sent_ticker.get(key)
+    if last and (datetime.now() - last).total_seconds() < TICKER_COOLDOWN_MIN * 60:
+        return True
+    return False
+
+def _mark_ticker_sent(ticker: str, scanner_name: str):
+    key = f"{ticker}|{scanner_name}"
+    _last_sent_ticker[key] = datetime.now()
+
 # ── Finviz grafik (proksi orqali) ────────────────────────────────────────────
 SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY", "25a1884447a69ac9773958347c108f59")
 
@@ -425,6 +445,8 @@ def check_email():
 
             if not is_new_symbol and not is_following:
                 print("[Skip] Noma'lum email formati")
+                ALREADY_SENT.add(msg_id)
+                save_sent_id(msg_id)
                 continue
 
             # "Following list of SCANNER: TICKER1, TICKER2" formatidan ticker olish
@@ -437,11 +459,15 @@ def check_email():
                     tickers = [t.strip().rstrip('.') for t in raw_tickers.split(",") if re.match(r"^[A-Z]{1,5}$", t.strip().rstrip('.'))]
                     print(f"[Following] Scanner: '{scanner_name}', Tickers: {tickers}")
                     for ticker in tickers:
+                        if _ticker_recently_sent(ticker, scanner_name):
+                            print(f"[Cooldown] {ticker} ({scanner_name}) yaqinda yuborilgan, o'tkazib yuborildi")
+                            continue
                         caption, passed, reason = build_message(ticker, scanner_name)
                         if not passed:
                             print(f"[Filter] {ticker} o'tmadi: {reason}")
                             continue
                         send_telegram_photo(caption, ticker)
+                        _mark_ticker_sent(ticker, scanner_name)
                         print(f"[Telegram] {ticker} yuborildi ✅")
                         time.sleep(2)
                     ALREADY_SENT.add(msg_id)
@@ -453,11 +479,15 @@ def check_email():
             tickers, scanner_name = extract_tickers_and_scanner(subject, body)
 
             for ticker in tickers:
+                if _ticker_recently_sent(ticker, scanner_name):
+                    print(f"[Cooldown] {ticker} ({scanner_name}) yaqinda yuborilgan, o'tkazib yuborildi")
+                    continue
                 caption, passed, reason = build_message(ticker, scanner_name)
                 if not passed:
                     print(f"[Filter] {ticker} o'tmadi: {reason}")
                     continue
                 send_telegram_photo(caption, ticker)
+                _mark_ticker_sent(ticker, scanner_name)
                 print(f"[Telegram] {ticker} yuborildi ✅")
                 time.sleep(2)
 
