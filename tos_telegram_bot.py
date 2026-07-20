@@ -386,15 +386,24 @@ def check_email():
         # emailni "o'qilgan" deb belgilab qo'yishi mumkin, shunda UNSEEN
         # qidiruv uni topolmay qoladi. Endi dublikatlarni faqat o'zimizning
         # ALREADY_SENT (sent_ids.txt) orqali nazorat qilamiz.
-        _, data = mail.search(None, f'(FROM "{TOS_SENDER}" SINCE "{since}")')
+        #
+        # DIQQAT 2: oddiy sequence number (mail.search) har xil ulanishda
+        # o'zgarib turadi — shuning uchun IMAP UID (mail.uid) ishlatamiz,
+        # u barqaror va bir xil email uchun doim bir xil qoladi.
+        _, data = mail.uid("search", None, f'(FROM "{TOS_SENDER}" SINCE "{since}")')
         ids = data[0].split()
         print(f"[Email] {len(ids)} ta email topildi (jami, SEEN/UNSEEN farqisiz)")
 
         for eid in ids:
-            _, msg_data = mail.fetch(eid, "(RFC822)")
+            uid_str = eid.decode() if isinstance(eid, bytes) else str(eid)
+            _, msg_data = mail.uid("fetch", eid, "(RFC822)")
+            if not msg_data or msg_data[0] is None:
+                continue
             msg     = email.message_from_bytes(msg_data[0][1])
             subject = msg.get("Subject", "")
-            msg_id  = msg.get("Message-ID", str(eid))
+            # Message-ID bo'lmasa, barqaror IMAP UID'dan foydalanamiz
+            # (sequence number'dan farqli o'laroq, UID o'zgarmaydi)
+            msg_id  = msg.get("Message-ID", f"uid-{uid_str}")
 
             if msg_id in ALREADY_SENT:
                 continue
