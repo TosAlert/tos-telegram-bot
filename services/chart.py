@@ -13,11 +13,11 @@ BLOCKED_DOMAINS = [
 ]
 
 
-DEBUG = False
+DEBUG = True
 
 def log(*args, **kwargs):
     if DEBUG:
-        log(*args, **kwargs)
+        print(*args, **kwargs)
 
 def _force_light_url(url):
     """Chart URL'idagi temani light ga majburlaydi."""
@@ -479,7 +479,7 @@ class ChartDownloader:
     def _resize_to_target_ratio(self, img_bytes, target_ratio=12 / 7):
         """
         Rasmni berilgan en:bo'y nisbatiga moslaydi. Finviz rasmi juda keng
-        chiqadi â kenglikni markazdan kesib (crop), grafik mazmuni ramkani
+        chiqadi — kenglikni markazdan kesib (crop), grafik mazmuni ramkani
         to'liq to'ldiradigan qilamiz.
         """
         from PIL import Image
@@ -564,7 +564,7 @@ class ChartDownloader:
 
                 img = chart.screenshot(type="png")
                 if _is_image_dark(img):
-                    log("[Chart] â ï¸ Screenshot ham dark, page screenshot ga o'tamiz")
+                    log("[Chart] ⚠️ Screenshot ham dark, page screenshot ga o'tamiz")
                     raise ValueError("Screenshot dark")
                 log(f"[Chart] Chart screenshot OK ({len(img)//1024} KB)")
                 return img
