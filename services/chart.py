@@ -134,6 +134,14 @@ class ChartDownloader:
         page = browser_manager.new_page()
         self._block_ads(page)
 
+        # Playwright'ning o'zining color-scheme emulyatsiyasi — bu sayt
+        # ichidagi JS/CSS o'zgarishlariga qaraganda ancha ishonchli, chunki
+        # brauzerning o'zi "prefers-color-scheme: light" deb hisoblaydi
+        try:
+            page.emulate_media(color_scheme="light")
+        except Exception as e:
+            log(f"[Chart] emulate_media xato: {e}")
+
         log(f"[Chart] Page id: {id(page)}")
         log(f"[Chart] Opening {ticker}")
 
@@ -343,17 +351,27 @@ class ChartDownloader:
             pass
 
         share_btn = page.locator(
-            'button:has-text("Share"), a:has-text("Share"), [class*="share"]:has-text("Share")'
+            '[data-testid="chart-toolbar-publish"], button:has-text("Share"), a:has-text("Share"), [class*="share"]:has-text("Share")'
         ).first
 
-        share_btn.wait_for(state="visible", timeout=8000)
+        share_btn.wait_for(state="visible", timeout=12000)
         self._safe_click(page, share_btn, "Share tugmasi")
 
         try:
-            page.wait_for_selector('text="Share Chart"', timeout=5000)
+            page.wait_for_selector('text="Share Chart"', timeout=6000)
             log("[Chart] 'Share Chart' modal topildi")
         except Exception:
-            log("[Chart] 'Share Chart' matni topilmadi, davom etamiz")
+            log("[Chart] 'Share Chart' matni topilmadi, qayta urinamiz")
+            # Ehtimol noto'g'ri "Share" elementi bosilgan — data-testid
+            # orqali aniq elementga qayta urinib ko'ramiz
+            try:
+                precise_btn = page.locator('[data-testid="chart-toolbar-publish"]').first
+                if precise_btn.count() > 0:
+                    self._safe_click(page, precise_btn, "Share tugmasi (aniq)")
+                    page.wait_for_selector('text="Share Chart"', timeout=6000)
+                    log("[Chart] 'Share Chart' modal ikkinchi urinishda topildi")
+            except Exception:
+                log("[Chart] 'Share Chart' modal ikkinchi urinishda ham topilmadi, davom etamiz")
 
         page.wait_for_timeout(1500)
 
