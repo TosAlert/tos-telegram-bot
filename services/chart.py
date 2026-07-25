@@ -388,6 +388,21 @@ class ChartDownloader:
         except Exception:
             pass
 
+        # Modal ichida grafik hali generatsiya qilinayotgan bo'lishi mumkin
+        # (spinner ko'rinadi) — shu tugamaguncha Download tugmasi paydo
+        # bo'lmaydi, shuning uchun avval spinner yo'qolishini kutamiz
+        try:
+            page.wait_for_selector(
+                '[data-testid="charts-publish-chart-spinner"]',
+                state="hidden",
+                timeout=20000,
+            )
+            log("[Chart] Spinner tugadi, grafik tayyor")
+        except Exception:
+            log("[Chart] Spinner kutish vaqti tugadi, baribir davom etamiz")
+
+        page.wait_for_timeout(500)
+
         download_selectors = [
             'button:has-text("Download")',
             'a:has-text("Download")',
@@ -617,8 +632,9 @@ def get_chart_and_info(ticker):
 
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
+            return img, info
 
-        return img, info
+        print(f"[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz")
 
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}")
@@ -632,6 +648,14 @@ def get_chart_and_info(ticker):
                 page.close()
         except Exception:
             pass
+
+    # Brauzer "crashed" bo'lgan bo'lishi mumkin — mavjud bo'lsa qayta ishga
+    # tushiramiz, toza holatdan boshlash uchun
+    try:
+        if hasattr(browser_manager, "restart"):
+            browser_manager.restart()
+    except Exception as e:
+        print(f"[Chart] Browser restart xato: {e}")
 
     # Qayta urinish (toza sahifa bilan)
     page = None
@@ -666,9 +690,12 @@ def get_chart(ticker):
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
         img = downloader._capture_chart(page)
+
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
-        return img
+            return img
+
+        print(f"[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz")
 
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}")
@@ -682,6 +709,14 @@ def get_chart(ticker):
                 page.close()
         except Exception:
             pass
+
+    # Brauzer "crashed" bo'lgan bo'lishi mumkin — mavjud bo'lsa qayta ishga
+    # tushiramiz, toza holatdan boshlash uchun
+    try:
+        if hasattr(browser_manager, "restart"):
+            browser_manager.restart()
+    except Exception as e:
+        print(f"[Chart] Browser restart xato: {e}")
 
     page = None
     try:
