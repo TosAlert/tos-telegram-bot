@@ -286,23 +286,17 @@ def build_message(ticker: str, scanner_name: str) -> tuple:
         return "", False, reason
 
     arrow   = "🟢" if d["change_pct"] >= 0 else "🔴"
-    rsi     = d["rsi"]
-    rsi_label = (f"{rsi} ⚠️ Overbought" if rsi >= 70
-                 else f"{rsi} ⚠️ Oversold" if 0 < rsi <= 30
-                 else str(rsi) if rsi > 0 else "N/A")
 
     msg = (
         f"🧠 <b>Algorithm:</b> {scanner_name}\n"
         f"📌 <b>Ticker:</b> <code>{ticker}</code>\n"
         f"🏢 <b>Company:</b> {d['company']}\n"
         f"🏭 <b>Sector:</b> {d['sector']}\n"
-        f"💰 <b>Price:</b> ${d['price']:.2f}\n"
         f"📊 <b>% Change:</b> {arrow} {d['change_pct']:+.2f}%\n"
         f"📉 <b>Yesterday Vol:</b> {format_number(d['avg_volume'])}\n"
         f"📈 <b>Current Vol:</b> {format_number(d['volume'])}\n"
         f"⚡ <b>RVol:</b> {d['rvol']}\n"
         f"📊 <b>Market Cap:</b> {format_number(d['market_cap'])}\n"
-        f"〰️ <b>RSI (14):</b> {rsi_label}\n"
         f"📉 <b>MACD:</b> {d['macd_trend']}\n"
         f"🎯 <b>Support:</b> ${d['support']} | <b>Resistance:</b> ${d['resistance']}\n"
         f"🕐 <b>Time:</b> {datetime.now().strftime('%H:%M, %d-%b-%Y')}"
@@ -311,58 +305,69 @@ def build_message(ticker: str, scanner_name: str) -> tuple:
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 def get_chart_image(ticker: str) -> bytes | None:
+    """
+    Faqat Finviz'dan olingan haqiqiy grafikni qaytaradi.
+    Agar Finviz'dan grafik olib bo'lmasa, None qaytaradi —
+    bu holda ticker butunlay tashlab o'tiladi (matplotlib fallback yo'q).
+    """
     img = get_chart(ticker)
-    
-    if img:
-        try:
-            image = Image.open(io.BytesIO(img))
-            
-            # 2x kattalashtirish
-            image = image.resize(
-            (image.width * 2, image.height * 2),
-            Image.LANCZOS,
-            )
 
-            # Sharpness
-            image = ImageEnhance.Sharpness(image).enhance(1.4)
+    if not img:
+        print(f"[Chart] {ticker} uchun Finviz grafigi olinmadi — o'tkazib yuborildi")
+        return None
 
-            # Contrast
-            image = ImageEnhance.Contrast(image).enhance(1.05)
+    try:
+        image = Image.open(io.BytesIO(img))
 
-            output = io.BytesIO()
-            image.save(output, format="PNG", optimize=True)
-        
-            print(f"[Chart] Finviz HD OK: {ticker}")
-        
-            return output.getvalue()
+        # 2x kattalashtirish
+        image = image.resize(
+        (image.width * 2, image.height * 2),
+        Image.LANCZOS,
+        )
 
-        except Exception as e:
-            print(f"[Chart] Pillow error: {e}")
-            return img
+        # Sharpness
+        image = ImageEnhance.Sharpness(image).enhance(1.4)
 
-    print("[Chart] Fallback → matplotlib")
-    return get_matplotlib_chart(ticker)
+        # Contrast
+        image = ImageEnhance.Contrast(image).enhance(1.05)
 
-def send_telegram_photo(caption: str, ticker: str):
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+
+        print(f"[Chart] Finviz HD OK: {ticker}")
+
+        return output.getvalue()
+
+    except Exception as e:
+        print(f"[Chart] Pillow error: {e}")
+        return img
+
+def send_telegram_photo(caption: str, ticker: str) -> bool:
+    """
+    Faqat grafik bilan birga yuboradi. Agar Finviz'dan grafik olinmasa,
+    hech narsa yubormaydi (matn fallback yo'q) va False qaytaradi.
+    """
     img_bytes = get_chart_image(ticker)
 
-    if img_bytes:
-        try:
-            url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-            resp = requests.post(url,
-                data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"},
-                files={"photo": (f"{ticker}.png", img_bytes, "image/png")},
-                timeout=90
-            )
-            if resp.ok:
-                print(f"[Telegram] {ticker} grafik bilan yuborildi ✅")
-                return
-            print(f"[Telegram xato] {resp.text}")
-        except Exception as e:
-            print(f"[Telegram xato] {e}")
+    if not img_bytes:
+        print(f"[Telegram] {ticker} — grafik yo'q, o'tkazib yuborildi (yuborilmadi)")
+        return False
 
-    # Grafik chiqmasa — matn yuboradi
-    send_telegram_text(caption)
+    try:
+        url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+        resp = requests.post(url,
+            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": (f"{ticker}.png", img_bytes, "image/png")},
+            timeout=90
+        )
+        if resp.ok:
+            print(f"[Telegram] {ticker} grafik bilan yuborildi ✅")
+            return True
+        print(f"[Telegram xato] {resp.text}")
+    except Exception as e:
+        print(f"[Telegram xato] {e}")
+
+    return False
 
 def send_telegram_text(text: str):
     url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -466,9 +471,10 @@ def check_email():
                         if not passed:
                             print(f"[Filter] {ticker} o'tmadi: {reason}")
                             continue
-                        send_telegram_photo(caption, ticker)
-                        _mark_ticker_sent(ticker, scanner_name)
-                        print(f"[Telegram] {ticker} yuborildi ✅")
+                        sent = send_telegram_photo(caption, ticker)
+                        if sent:
+                            _mark_ticker_sent(ticker, scanner_name)
+                            print(f"[Telegram] {ticker} yuborildi ✅")
                         time.sleep(2)
                     ALREADY_SENT.add(msg_id)
                     save_sent_id(msg_id)
@@ -486,9 +492,10 @@ def check_email():
                 if not passed:
                     print(f"[Filter] {ticker} o'tmadi: {reason}")
                     continue
-                send_telegram_photo(caption, ticker)
-                _mark_ticker_sent(ticker, scanner_name)
-                print(f"[Telegram] {ticker} yuborildi ✅")
+                sent = send_telegram_photo(caption, ticker)
+                if sent:
+                    _mark_ticker_sent(ticker, scanner_name)
+                    print(f"[Telegram] {ticker} yuborildi ✅")
                 time.sleep(2)
 
             ALREADY_SENT.add(msg_id)
