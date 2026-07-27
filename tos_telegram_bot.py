@@ -29,8 +29,11 @@ FINVIZ_EMAIL     = os.getenv("FINVIZ_EMAIL")
 FINVIZ_PASSWORD  = os.getenv("FINVIZ_PASSWORD")
 
 TOS_SENDER       = "alerts@thinkorswim.com"
-IDLE_TIMEOUT     = 24 * 60   # 24 daqiqa — Gmail IDLE ulanishini shundan oldin yangilaymiz
-FALLBACK_POLL    = 600       # 10 daqiqada bir ehtiyot uchun tekshiruv (IDLE signalni oʻtkazib yuborsa)
+IDLE_TIMEOUT     = 5 * 60    # 5 daqiqa — tarmoq ulanishini muntazam yangilab turamiz
+                              # (Railway'ning tarmoq proksisi uzoq bo'sh ulanishlarni
+                              # ~40 daqiqada o'zi yopib qo'yishi kuzatilgan, shuning
+                              # uchun undan oldinroq o'zimiz proaktiv yangilaymiz)
+FALLBACK_POLL    = 300       # 5 daqiqada bir ehtiyot uchun tekshiruv (IDLE signalni oʻtkazib yuborsa)
 MIN_RVOL         = 1.0
 RSI_MIN          = 30
 RSI_MAX          = 80
@@ -524,6 +527,9 @@ def imap_idle_loop():
             client.select_folder("INBOX")
             print("📡 IMAP IDLE rejimida kutilmoqda (email kelishi bilan darhol javob beradi)...")
 
+            # Ulanish uzilib qayta tiklanganda, o'sha vaqt ichida kelgan
+            # emaillarni o'tkazib yubormaslik uchun DARHOL bir marta tekshiramiz
+            check_email()
             last_poll = time.time()
 
             while True:
