@@ -26,12 +26,10 @@ class BrowserManager:
             return
 
         self.playwright = sync_playwright().start()
-
         railway = os.getenv("RAILWAY_ENVIRONMENT") is not None
 
         if railway:
             print("[Browser] Railway mode")
-
             self.browser = self.playwright.chromium.launch(
                 headless=True,
                 chromium_sandbox=False,
@@ -52,7 +50,6 @@ class BrowserManager:
                     "--no-default-browser-check",
                 ],
             )
-
             self.context = self.browser.new_context(
                 viewport={"width": 700, "height": 1600},
                 accept_downloads=True,
@@ -66,18 +63,13 @@ class BrowserManager:
                     "Chrome/138.0.7204.169 Safari/537.36"
                 ),
             )
-
             self.context.set_extra_http_headers({
                 "Accept-Language": "en-US,en;q=0.9"
             })
-
             self.login_finviz()
-
         else:
             print("[Browser] Windows mode")
-
             profile = str(Path.home() / "playwright_profile")
-
             self.context = self.playwright.chromium.launch_persistent_context(
                 user_data_dir=profile,
                 channel="chrome",
@@ -90,28 +82,24 @@ class BrowserManager:
                     "--disable-blink-features=AutomationControlled",
                 ],
             )
-
             self.login_finviz()
 
         self.context.set_default_timeout(60000)
         self.context.set_default_navigation_timeout(60000)
-        
+
     def login_finviz(self):
         if not FINVIZ_EMAIL or not FINVIZ_PASSWORD:
             print("[Finviz] Login ma'lumotlari topilmadi")
             return
 
         page = self.context.new_page()
-
         try:
             print("[Finviz] Login boshlanmoqda...")
-
             page.goto(
                 "https://finviz.com/login-email?remember=true",
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
-
             page.wait_for_timeout(3000)
 
             # Agar allaqachon login bo'lgan bo'lsa
@@ -128,7 +116,6 @@ class BrowserManager:
 
             email.fill(FINVIZ_EMAIL)
             password.fill(FINVIZ_PASSWORD)
-
             submit.click()
 
             page.wait_for_timeout(4000)
@@ -138,24 +125,19 @@ class BrowserManager:
             else:
                 print("[Finviz] Login muvaffaqiyatli ✅")
                 print(f"[Finviz] URL: {page.url}")
-
         except Exception as e:
             print(f"[Finviz] Login xatosi: {e}")
-
         finally:
             page.close()
 
     def new_page(self):
         if self.context is None:
             self.start()
-
         page = self.context.new_page()
         page.set_viewport_size({"width": 1600, "height": 1200})
-
         page.set_extra_http_headers({
             "Accept-Language": "en-US,en;q=0.9"
         })
-
         return page
 
     def close(self):
@@ -168,10 +150,48 @@ class BrowserManager:
                 self.playwright.stop()
         except Exception:
             pass
+        self.context = None
+        self.browser = None
+        self.playwright = None
+
+    def restart(self):
+        """
+        Brauzerni majburan yopib, tozadan qayta ko'taradi.
+
+        Avval bu metod umuman mavjud emas edi — chart.py ichidagi
+        `if hasattr(browser_manager, "restart")` tekshiruvi doim False
+        qaytarib, qayta urinish (retry) va hard-timeout watchdog hech
+        qachon haqiqiy restart qilmasdi. Endi Chromium sub-processi
+        osilib qolgan yoki javob bermay qolgan hollarda bu metod
+        chaqiriladi va butun brauzer/kontekst/playwright instansiyasi
+        tozalanib, qaytadan ishga tushiriladi.
+        """
+        print("[Browser] Restart boshlandi...")
+        try:
+            if self.context:
+                self.context.close()
+        except Exception as e:
+            print(f"[Browser] Restart: context.close xato: {e}")
+        try:
+            if self.browser:
+                self.browser.close()
+        except Exception as e:
+            print(f"[Browser] Restart: browser.close xato: {e}")
+        try:
+            if self.playwright:
+                self.playwright.stop()
+        except Exception as e:
+            print(f"[Browser] Restart: playwright.stop xato: {e}")
 
         self.context = None
         self.browser = None
         self.playwright = None
+
+        try:
+            self.start()
+            print("[Browser] Restart muvaffaqiyatli, brauzer qayta ko'tarildi ✅")
+        except Exception as e:
+            print(f"[Browser] Restart: qayta ko'tarishda xato: {e}")
 
 
 browser_manager = BrowserManager()
