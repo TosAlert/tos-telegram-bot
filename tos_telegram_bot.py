@@ -14,7 +14,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
-from services.chart import get_chart
+from services.chart import get_chart_safe
 from PIL import Image
 from PIL import ImageEnhance
 import io
@@ -313,7 +313,7 @@ def get_chart_image(ticker: str) -> bytes | None:
     Agar Finviz'dan grafik olib bo'lmasa, None qaytaradi —
     bu holda ticker butunlay tashlab o'tiladi (matplotlib fallback yo'q).
     """
-    img = get_chart(ticker)
+    img = get_chart_safe(ticker)
 
     if not img:
         print(f"[Chart] {ticker} uchun Finviz grafigi olinmadi — o'tkazib yuborildi")
