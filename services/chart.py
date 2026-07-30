@@ -2,6 +2,7 @@ import re
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from playwright.sync_api import Error, TimeoutError
+
 from services.browser import browser_manager
 
 FINVIZ_URL = "https://finviz.com/quote.ashx?t={ticker}&p=d&r=m6"
@@ -12,12 +13,13 @@ BLOCKED_DOMAINS = [
     "criteo", "taboola", "outbrain", "adnxs.com", "adservice.google",
 ]
 
-
 DEBUG = True
+
 
 def log(*args, **kwargs):
     if DEBUG:
         print(*args, **kwargs)
+
 
 def _force_light_url(url):
     """Chart URL'idagi temani light ga majburlaydi."""
@@ -75,7 +77,6 @@ def _is_image_dark(img_bytes, threshold=90):
 
 
 class ChartDownloader:
-
     def __init__(self):
         browser_manager.start()
 
@@ -245,84 +246,64 @@ class ChartDownloader:
 
     def parse_finviz_info(self, page):
         """Finviz sahifasidan asosiy ma'lumotlarni o'qiydi."""
-
         try:
             data = page.evaluate("""
-            () => {
+                () => {
+                    const result = {
+                        company: "",
+                        sector: "",
+                        industry: "",
+                        price: "",
+                        change_pct: "",
+                        volume: "",
+                        avg_volume: "",
+                        market_cap: ""
+                    };
 
-                const result = {
-                    company: "",
-                    sector: "",
-                    industry: "",
-                    price: "",
-                    change_pct: "",
-                    volume: "",
-                    avg_volume: "",
-                    market_cap: ""
-                };
-
-                // Company
-                const title = document.querySelector("title");
-                if (title) {
-                    result.company = title.innerText.split(" Stock")[0].trim();
-                }
-
-                // Jadvaldagi barcha maydonlarni o'qish
-                document.querySelectorAll("table td").forEach(td => {
-
-                    const key = td.innerText.trim();
-
-                    const valueCell = td.nextElementSibling;
-                    if (!valueCell) return;
-
-                    const value = valueCell.innerText.trim();
-
-                    switch (key) {
-
-                        case "Sector":
-                            result.sector = value;
-                            break;
-
-                        case "Industry":
-                            result.industry = value;
-                            break;
-
-                        case "Market Cap":
-                            result.market_cap = value;
-                            break;
-
-                        case "Volume":
-                            result.volume = value;
-                            break;
-
-                        case "Avg Volume":
-                            result.avg_volume = value;
-                            break;
-
+                    const title = document.querySelector("title");
+                    if (title) {
+                        result.company = title.innerText.split(" Stock")[0].trim();
                     }
-                });
 
-                // Yuqoridagi narx
-                const price = document.querySelector("[data-test='instrument-price-last']");
-                if (price)
-                    result.price = price.innerText.trim();
+                    document.querySelectorAll("table td").forEach(td => {
+                        const key = td.innerText.trim();
+                        const valueCell = td.nextElementSibling;
+                        if (!valueCell) return;
+                        const value = valueCell.innerText.trim();
+                        switch (key) {
+                            case "Sector":
+                                result.sector = value;
+                                break;
+                            case "Industry":
+                                result.industry = value;
+                                break;
+                            case "Market Cap":
+                                result.market_cap = value;
+                                break;
+                            case "Volume":
+                                result.volume = value;
+                                break;
+                            case "Avg Volume":
+                                result.avg_volume = value;
+                                break;
+                        }
+                    });
 
-                // O'zgarish %
-                const change = document.querySelector("[data-test='instrument-price-change']");
-                if (change)
-                    result.change_pct = change.innerText.trim();
+                    const price = document.querySelector("[data-test='instrument-price-last']");
+                    if (price)
+                        result.price = price.innerText.trim();
 
-                return result;
-            }
+                    const change = document.querySelector("[data-test='instrument-price-change']");
+                    if (change)
+                        result.change_pct = change.innerText.trim();
+
+                    return result;
+                }
             """)
-
             log(f"[Finviz] {data}")
-
             return data
-
         except Exception as e:
             log(f"[Finviz Parser] {e}")
-
             return {
                 "company": "",
                 "sector": "",
@@ -335,7 +316,6 @@ class ChartDownloader:
             }
 
     def _capture_via_share_download(self, page):
-
         try:
             page.evaluate("""
                 () => {
@@ -353,7 +333,6 @@ class ChartDownloader:
         share_btn = page.locator(
             '[data-testid="chart-toolbar-publish"], button:has-text("Share"), a:has-text("Share"), [class*="share"]:has-text("Share")'
         ).first
-
         share_btn.wait_for(state="visible", timeout=12000)
         self._safe_click(page, share_btn, "Share tugmasi")
 
@@ -451,7 +430,6 @@ class ChartDownloader:
         try:
             with page.expect_download(timeout=15000) as download_info:
                 self._safe_click(page, download_btn, "Download tugmasi")
-
             download = download_info.value
 
             import tempfile
@@ -459,10 +437,8 @@ class ChartDownloader:
 
             tmp_path = _os.path.join(tempfile.gettempdir(), download.suggested_filename)
             download.save_as(tmp_path)
-
             with open(tmp_path, "rb") as f:
                 img_bytes = f.read()
-
             try:
                 _os.remove(tmp_path)
             except Exception:
@@ -482,7 +458,7 @@ class ChartDownloader:
         if src_url and "theme=dark" in src_url.lower():
             light_url = _force_light_url(src_url)
             if light_url and light_url != src_url:
-                log(f"[Chart] Dark chart URL topildi, light ga o'zgartirildi:\n  {light_url}")
+                log(f"[Chart] Dark chart URL topildi, light ga o'zgartirildi:\n {light_url}")
                 try:
                     resp = page.request.get(light_url, timeout=15000)
                     if resp.ok:
@@ -544,7 +520,6 @@ class ChartDownloader:
             "div[id^='chart']",
             "div[class*='chart']:has(canvas)",
         ]
-
         for selector in container_selectors:
             try:
                 locator = page.locator(selector).first
@@ -562,7 +537,6 @@ class ChartDownloader:
             "div[id^='chart'] canvas",
             "div[class*='chart'] canvas",
         ]
-
         for selector in selectors:
             try:
                 locator = page.locator(selector).first
@@ -583,9 +557,7 @@ class ChartDownloader:
             log(f"[Chart] Share->Download muvaffaqiyatsiz: {e}")
 
         log("[Chart] Zaxira usul: screenshot")
-
         chart = self._find_chart(page)
-
         if chart:
             try:
                 box = chart.bounding_box()
@@ -599,6 +571,7 @@ class ChartDownloader:
                 if _is_image_dark(img):
                     log("[Chart] ⚠️ Screenshot ham dark, page screenshot ga o'tamiz")
                     raise ValueError("Screenshot dark")
+
                 log(f"[Chart] Chart screenshot OK ({len(img)//1024} KB)")
                 return img
             except Exception as e:
@@ -626,16 +599,12 @@ def get_chart_and_info(ticker):
     try:
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
-
         info = downloader.parse_finviz_info(page)
-        img  = downloader._capture_chart(page)
-
+        img = downloader._capture_chart(page)
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
             return img, info
-
         print(f"[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz")
-
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}")
     except Error as e:
@@ -663,15 +632,11 @@ def get_chart_and_info(ticker):
         print(f"[Chart] Qayta urinish : {ticker}")
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
-
         info = downloader.parse_finviz_info(page)
-        img  = downloader._capture_chart(page)
-
+        img = downloader._capture_chart(page)
         if img:
             print(f"[Chart] Qayta urinishda OK : {ticker}")
-
         return img, info
-
     except Exception as e:
         print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}")
     finally:
@@ -690,13 +655,10 @@ def get_chart(ticker):
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
         img = downloader._capture_chart(page)
-
         if img:
             print(f"[Chart] Finviz OK : {ticker}")
             return img
-
         print(f"[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz")
-
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}")
     except Error as e:
@@ -737,3 +699,62 @@ def get_chart(ticker):
             pass
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Hard-timeout watchdog
+# ---------------------------------------------------------------------------
+# get_chart / get_chart_and_info ichidagi barcha Playwright wait/click
+# chaqiruvlarida timeout bor. Lekin agar Chromium sub-processi butunlay
+# javob berishni to'xtatib qo'ysa (crash bo'lib process o'zi o'lmasa), sync
+# Playwright ba'zan shu timeout'larni ham hurmat qilmay ichki IPC darajasida
+# abadiy kutib qolishi mumkin. Shuning uchun butun chaqiruvni alohida
+# thread'da ishga tushirib, tashqi "hard" vaqt chegarasi qo'yamiz — agar
+# shu vaqt ichida tugamasa, brauzer majburan restart qilinadi va bot butunlay
+# bloklanib qolmaydi.
+#
+# MUHIM: bot faylida (masalan tos_telegram_bot.py) endi to'g'ridan-to'g'ri
+# get_chart_and_info(...) / get_chart(...) o'rniga shu quyidagi
+# get_chart_and_info_safe(...) / get_chart_safe(...) chaqirilishi kerak.
+
+import concurrent.futures
+
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+HARD_TIMEOUT = 90  # soniya
+
+
+def get_chart_and_info_safe(ticker, hard_timeout=HARD_TIMEOUT):
+    """get_chart_and_info'ni hard-timeout bilan himoyalab chaqiradi."""
+    future = _executor.submit(get_chart_and_info, ticker)
+    try:
+        return future.result(timeout=hard_timeout)
+    except concurrent.futures.TimeoutError:
+        log(f"[Chart] HARD TIMEOUT ({hard_timeout}s) — {ticker} uchun chart olish osilib qoldi")
+        try:
+            if hasattr(browser_manager, "restart"):
+                browser_manager.restart()
+        except Exception as e:
+            log(f"[Chart] Hard timeout restart xato: {e}")
+        return None, None
+    except Exception as e:
+        log(f"[Chart] get_chart_and_info_safe xato: {e}")
+        return None, None
+
+
+def get_chart_safe(ticker, hard_timeout=HARD_TIMEOUT):
+    """get_chart'ni hard-timeout bilan himoyalab chaqiradi."""
+    future = _executor.submit(get_chart, ticker)
+    try:
+        return future.result(timeout=hard_timeout)
+    except concurrent.futures.TimeoutError:
+        log(f"[Chart] HARD TIMEOUT ({hard_timeout}s) — {ticker} uchun chart olish osilib qoldi")
+        try:
+            if hasattr(browser_manager, "restart"):
+                browser_manager.restart()
+        except Exception as e:
+            log(f"[Chart] Hard timeout restart xato: {e}")
+        return None
+    except Exception as e:
+        log(f"[Chart] get_chart_safe xato: {e}")
+        return None
