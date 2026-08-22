@@ -255,52 +255,206 @@ def calc_macd(closes: pd.Series) -> str:
         return "N/A"
 
 # ── Yahoo Finance ─────────────────────────────────────────────────────────────
+# =========================================================
+# Yahoo Finance
+# =========================================================
+
+YAHOO_CACHE = {}
+YAHOO_CACHE_TTL = 300  # 5 daqiqa
+
+
 def get_stock_info(ticker: str) -> dict:
+
+    ticker = ticker.upper().strip()
+
+    # -----------------------------------------------------
+    # CACHE
+    # -----------------------------------------------------
+    now = time.time()
+
+    cached = YAHOO_CACHE.get(ticker)
+
+    if cached:
+        cached_time, cached_data = cached
+
+        if now - cached_time < YAHOO_CACHE_TTL:
+            print(f"[Yahoo] {ticker}: cache ishlatildi")
+            return cached_data
+
     try:
+
+        print(f"[Yahoo] {ticker}: ma'lumot olinmoqda...")
+
         stock = yf.Ticker(ticker)
-        info  = stock.info
 
-        price = float(
-            info.get("currentPrice") or
-            info.get("regularMarketPrice") or
-            info.get("navPrice") or 0.0
+        # -------------------------------------------------
+        # Bitta asosiy history so'rovi
+        # -------------------------------------------------
+
+        hist = stock.history(
+            period="1y",
+            interval="1d",
+            auto_adjust=False
         )
-        prev_close = float(info.get("previousClose") or info.get("regularMarketPreviousClose") or 0.0)
-        change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
-        volume     = int(info.get("volume") or info.get("regularMarketVolume") or 0)
-        avg_vol    = int(info.get("averageVolume") or 0)
-        rvol       = round(volume / avg_vol, 2) if avg_vol else 0.0
-        market_cap = info.get("marketCap") or 0
-        sector     = info.get("sector") or "N/A"
-        company    = info.get("longName") or info.get("shortName") or ticker
 
-        hist = stock.history(period="1y")
-        if not hist.empty:
-            closes     = hist["Close"].dropna()
-            rsi        = calc_rsi(closes)
-            macd_trend = calc_macd(closes)
-            support    = round(float(hist["Low"].min()), 2)
-            resistance = round(float(hist["High"].max()), 2)
+        if hist.empty:
+            print(f"[Yahoo xato] {ticker}: history bo'sh")
+            return {}
+
+        closes = hist["Close"].dropna()
+
+        if closes.empty:
+            print(f"[Yahoo xato] {ticker}: Close ma'lumoti yo'q")
+            return {}
+
+        # -------------------------------------------------
+        # PRICE
+        # -------------------------------------------------
+
+        price = float(closes.iloc[-1])
+
+        # -------------------------------------------------
+        # PREVIOUS CLOSE
+        # -------------------------------------------------
+
+        if len(closes) >= 2:
+            prev_close = float(closes.iloc[-2])
         else:
-            rsi, macd_trend, support, resistance = 0.0, "N/A", 0.0, 0.0
+            prev_close = price
 
-        return {
-            "company": company, "sector": sector,
-            "price": price, "change_pct": change_pct,
-            "volume": volume, "avg_volume": avg_vol, "rvol": rvol,
-            "market_cap": market_cap, "rsi": rsi,
-            "macd_trend": macd_trend, "support": support, "resistance": resistance,
+        change_pct = (
+            ((price - prev_close) / prev_close) * 100
+            if prev_close
+            else 0.0
+        )
+
+        # -------------------------------------------------
+        # VOLUME
+        # -------------------------------------------------
+
+        volume = 0
+
+        if "Volume" in hist.columns:
+            try:
+                volume = int(hist["Volume"].iloc[-1])
+            except Exception:
+                volume = 0
+
+        # Average volume — oxirgi 20 kun
+        if "Volume" in hist.columns:
+            try:
+                avg_vol = int(
+                    hist["Volume"]
+                    .tail(20)
+                    .mean()
+                )
+            except Exception:
+                avg_vol = 0
+        else:
+            avg_vol = 0
+
+        rvol = (
+            round(volume / avg_vol, 2)
+            if avg_vol
+            else 0.0
+        )
+
+        # -------------------------------------------------
+        # RSI
+        # -------------------------------------------------
+
+        rsi = calc_rsi(closes)
+
+        # -------------------------------------------------
+        # MACD
+        # -------------------------------------------------
+
+        macd_trend = calc_macd(closes)
+
+        # -------------------------------------------------
+        # SUPPORT / RESISTANCE
+        # -------------------------------------------------
+
+        support = round(
+            float(hist["Low"].min()),
+            2
+        )
+
+        resistance = round(
+            float(hist["High"].max()),
+            2
+        )
+
+        # -------------------------------------------------
+        # COMPANY / SECTOR
+        # -------------------------------------------------
+
+        # info so'rovini har safar qilmaymiz.
+        # Faqat cache'da mavjud bo'lsa ishlatamiz.
+        company = ticker
+        sector = "N/A"
+        market_cap = 0
+
+        try:
+            info = stock.info
+
+            company = (
+                info.get("longName")
+                or info.get("shortName")
+                or ticker
+            )
+
+            sector = info.get("sector") or "N/A"
+
+            market_cap = info.get("marketCap") or 0
+
+        except Exception as e:
+            print(
+                f"[Yahoo] {ticker}: info olinmadi: {e}"
+            )
+
+        # -------------------------------------------------
+        # RESULT
+        # -------------------------------------------------
+
+        result = {
+            "price": price,
+            "prev_close": prev_close,
+            "change_pct": change_pct,
+            "volume": volume,
+            "avg_vol": avg_vol,
+            "rvol": rvol,
+            "market_cap": market_cap,
+            "sector": sector,
+            "company": company,
+            "rsi": rsi,
+            "macd_trend": macd_trend,
+            "support": support,
+            "resistance": resistance,
         }
-    except Exception as e:
-        print(f"[Yahoo xato] {ticker}: {e}")
-        return {}
 
-def format_number(n) -> str:
-    n = float(n or 0)
-    if n >= 1_000_000_000: return f"{n/1_000_000_000:.2f}B"
-    if n >= 1_000_000:     return f"{n/1_000_000:.2f}M"
-    if n >= 1_000:         return f"{n/1_000:.2f}K"
-    return str(round(n, 2))
+        # -------------------------------------------------
+        # CACHE SAQLASH
+        # -------------------------------------------------
+
+        YAHOO_CACHE[ticker] = (
+            now,
+            result
+        )
+
+        print(
+            f"[Yahoo] {ticker}: muvaffaqiyatli olindi ✅"
+        )
+
+        return result
+
+    except Exception as e:
+
+        print(
+            f"[Yahoo xato] {ticker}: {e}"
+        )
+
+        return {}
 
 # ── Signal filtri ─────────────────────────────────────────────────────────────
 def is_strong_signal(d: dict) -> tuple:
