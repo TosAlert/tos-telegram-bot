@@ -316,174 +316,254 @@ class ChartDownloader:
             }
 
     def _capture_via_share_download(self, page):
-        try:
-            page.evaluate("""
-                () => {
-                    document.querySelectorAll(
-                        '[class*="ic_dimm"], [class*="ic_under"], [class*="ic_fade"], [class*="overlay"]'
-                    ).forEach(el => {
-                        el.style.pointerEvents = 'none';
-                        el.style.display = 'none';
-                    });
-                }
-            """)
-        except Exception:
-            pass
+    """
+    Finviz'dagi Share -> Download orqali ORIGINAL yuqori sifatli
+    chart rasmini olish.
 
-        share_btn = page.locator(
-            '[data-testid="chart-toolbar-publish"], button:has-text("Share"), a:has-text("Share"), [class*="share"]:has-text("Share")'
+    Muhim:
+    - Screenshot emas
+    - Canvas screenshot emas
+    - Finvizning o'z Download fayli olinadi
+    - "Share Chart" matniga qattiq bog'lanmaydi
+    - Spinner bo'lmasa ham davom etadi
+    - Download tugmasi kechroq paydo bo'lsa kutadi
+    """
+
+    log("[Chart] Share -> Download jarayoni boshlandi")
+
+    # ---------------------------------------------------------
+    # 1. Share tugmasini topish
+    # ---------------------------------------------------------
+    share_selectors = [
+        '[data-testid="chart-toolbar-publish"]',
+        'button:has-text("Share")',
+        'a:has-text("Share")',
+        '[class*="share"]:has-text("Share")',
+    ]
+
+    share_btn = None
+
+    for sel in share_selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                loc.wait_for(state="visible", timeout=4000)
+                share_btn = loc
+                log(f"[Chart] Share tugmasi topildi: {sel}")
+                break
+        except Exception:
+            continue
+
+    if share_btn is None:
+        raise Exception("Share tugmasi topilmadi")
+
+    # ---------------------------------------------------------
+    # 2. Share bosish
+    # ---------------------------------------------------------
+    self._safe_click(page, share_btn, "Share tugmasi")
+
+    # Modal / Share panel ochilishi uchun qisqa vaqt
+    page.wait_for_timeout(1000)
+
+    # ---------------------------------------------------------
+    # 3. "Share Chart" matniga qattiq bog'lanmaymiz
+    # ---------------------------------------------------------
+    try:
+        modal = page.locator(
+            '[role="dialog"], '
+            '[class*="modal"], '
+            '[class*="dialog"], '
+            '[data-testid*="publish"]'
         ).first
-        share_btn.wait_for(state="visible", timeout=12000)
-        self._safe_click(page, share_btn, "Share tugmasi")
 
-        try:
-            page.wait_for_selector('text="Share Chart"', timeout=6000)
-            log("[Chart] 'Share Chart' modal topildi")
-        except Exception:
-            log("[Chart] 'Share Chart' matni topilmadi, qayta urinamiz")
-            # Ehtimol noto'g'ri "Share" elementi bosilgan — data-testid
-            # orqali aniq elementga qayta urinib ko'ramiz
+        if modal.count() > 0:
             try:
-                precise_btn = page.locator('[data-testid="chart-toolbar-publish"]').first
-                if precise_btn.count() > 0:
-                    self._safe_click(page, precise_btn, "Share tugmasi (aniq)")
-                    page.wait_for_selector('text="Share Chart"', timeout=6000)
-                    log("[Chart] 'Share Chart' modal ikkinchi urinishda topildi")
+                modal.wait_for(state="visible", timeout=3000)
+                log("[Chart] Share modal topildi")
             except Exception:
-                log("[Chart] 'Share Chart' modal ikkinchi urinishda ham topilmadi, davom etamiz")
+                log("[Chart] Modal aniq topilmadi, davom etamiz")
+    except Exception:
+        pass
 
-        page.wait_for_timeout(1500)
+    # ---------------------------------------------------------
+    # 4. Spinner bo'lsa kutamiz.
+    #    Spinner umuman mavjud bo'lmasa KUTMAYMIZ.
+    # ---------------------------------------------------------
+    spinner_selectors = [
+        '[data-testid="charts-publish-chart-spinner"]',
+        '[class*="spinner"]',
+        '[class*="loading"]',
+    ]
 
+    for sel in spinner_selectors:
         try:
-            page.evaluate("""
-                () => {
-                    document.querySelectorAll(
-                        '[class*="ic_dimm"], [class*="ic_under"], [class*="ic_fade"]'
-                    ).forEach(el => {
-                        el.style.pointerEvents = 'none';
-                    });
-                }
-            """)
+            spinner = page.locator(sel).first
+
+            if spinner.count() == 0:
+                continue
+
+            if spinner.is_visible():
+                log(f"[Chart] Spinner topildi: {sel}")
+
+                try:
+                    spinner.wait_for(
+                        state="hidden",
+                        timeout=15000
+                    )
+                    log("[Chart] Spinner tugadi")
+                except Exception:
+                    log("[Chart] Spinner timeout -> davom etamiz")
+
+                break
+
         except Exception:
-            pass
+            continue
 
-        # Modal ichida grafik hali generatsiya qilinayotgan bo'lishi mumkin
-        # (spinner ko'rinadi) — shu tugamaguncha Download tugmasi paydo
-        # bo'lmaydi, shuning uchun avval spinner yo'qolishini kutamiz
-        try:
-            page.wait_for_selector(
-                '[data-testid="charts-publish-chart-spinner"]',
-                state="hidden",
-                timeout=20000,
-            )
-            log("[Chart] Spinner tugadi, grafik tayyor")
-        except Exception:
-            log("[Chart] Spinner kutish vaqti tugadi, baribir davom etamiz")
+    # ---------------------------------------------------------
+    # 5. Download tugmasini kutish
+    # ---------------------------------------------------------
+    download_selectors = [
+        'button:has-text("Download")',
+        'a:has-text("Download")',
+        'button[title*="Download" i]',
+        'a[download]',
+        '[data-testid*="download"]',
+        '[class*="download"]',
+    ]
 
-        page.wait_for_timeout(500)
+    download_btn = None
 
-        download_selectors = [
-            'button:has-text("Download")',
-            'a:has-text("Download")',
-            '[class*="download"]',
-            'button[title*="Download" i]',
-            'a[download]',
-        ]
+    # Maksimal 20 soniya davomida Download paydo bo'lishini kutamiz
+    start_time = time.time()
 
-        download_btn = None
+    while time.time() - start_time < 20:
+
         for sel in download_selectors:
             try:
                 loc = page.locator(sel).first
+
                 if loc.count() > 0:
-                    loc.wait_for(state="visible", timeout=3000)
-                    download_btn = loc
-                    log(f"[Chart] Download tugma topildi: {sel}")
-                    break
+                    if loc.is_visible():
+                        download_btn = loc
+                        log(f"[Chart] Download tugmasi topildi: {sel}")
+                        break
+
             except Exception:
                 continue
 
-        if download_btn is None:
-            raise Exception("Download tugmasi topilmadi")
+        if download_btn is not None:
+            break
 
-        # Chart so'rovining URL'ini ushlab olamiz (zaxira uchun)
-        captured_url = {"value": None}
+        page.wait_for_timeout(500)
 
-        def _on_request(request):
-            u = request.url
-            low = u.lower()
-            if (("chart.ashx" in low)
-                    or ("finviz.com/chart" in low)
-                    or ("charts" in low and "finviz" in low)):
-                captured_url["value"] = u
+    if download_btn is None:
+        raise Exception(
+            "Share modal ochildi, lekin Download tugmasi 20 soniyada topilmadi"
+        )
 
-        def _on_response(response):
-            u = response.url
-            low = u.lower()
-            ct = (response.headers or {}).get("content-type", "")
-            if "image" in ct.lower() and "finviz" in low:
-                captured_url["value"] = u
+    # ---------------------------------------------------------
+    # 6. Download eventni kutish
+    # ---------------------------------------------------------
+    img_bytes = None
 
-        page.on("request", _on_request)
-        page.on("response", _on_response)
+    try:
+        with page.expect_download(timeout=30000) as download_info:
 
-        img_bytes = None
-        try:
-            with page.expect_download(timeout=15000) as download_info:
-                self._safe_click(page, download_btn, "Download tugmasi")
-            download = download_info.value
+            self._safe_click(
+                page,
+                download_btn,
+                "Download tugmasi"
+            )
 
-            import tempfile
-            import os as _os
+        download = download_info.value
 
-            tmp_path = _os.path.join(tempfile.gettempdir(), download.suggested_filename)
-            download.save_as(tmp_path)
-            with open(tmp_path, "rb") as f:
-                img_bytes = f.read()
-            try:
-                _os.remove(tmp_path)
-            except Exception:
-                pass
-        finally:
-            try:
-                page.remove_listener("request", _on_request)
-            except Exception:
-                pass
-            try:
-                page.remove_listener("response", _on_response)
-            except Exception:
-                pass
+        log(
+            f"[Chart] Download boshlandi: "
+            f"{download.suggested_filename}"
+        )
 
-        # Zaxira: URL'da tema dark bo'lsa, light ga o'zgartirib qayta yuklaymiz
-        src_url = captured_url["value"]
-        if src_url and "theme=dark" in src_url.lower():
-            light_url = _force_light_url(src_url)
-            if light_url and light_url != src_url:
-                log(f"[Chart] Dark chart URL topildi, light ga o'zgartirildi:\n {light_url}")
-                try:
-                    resp = page.request.get(light_url, timeout=15000)
-                    if resp.ok:
-                        body = resp.body()
-                        if body and len(body) > 1000:
-                            img_bytes = body
-                            log("[Chart] Light versiya URL orqali yuklandi")
-                except Exception as e:
-                    log(f"[Chart] Light URL yuklashda xato: {e}")
+        # -----------------------------------------------------
+        # 7. Faylni vaqtinchalik saqlash
+        # -----------------------------------------------------
+        import tempfile
+        import os as _os
 
-        if not img_bytes:
-            raise Exception("Download rasmi olinmadi")
+        tmp_path = _os.path.join(
+            tempfile.gettempdir(),
+            download.suggested_filename
+        )
 
-        log(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
+        download.save_as(tmp_path)
+
+        with open(tmp_path, "rb") as f:
+            img_bytes = f.read()
 
         try:
-            close_btn = page.locator(
-                'button:has-text("Close"), [class*="modal"] button[class*="close"]'
-            ).first
-            if close_btn.count() > 0:
-                close_btn.click(timeout=1000)
+            _os.remove(tmp_path)
         except Exception:
             pass
 
-        return img_bytes
+        log(
+            f"[Chart] Download fayli olindi: "
+            f"{len(img_bytes) // 1024} KB"
+        )
+
+    except Exception as e:
+        log(f"[Chart] Download event xato: {e}")
+
+    # ---------------------------------------------------------
+    # 8. Rasm haqiqatan PNG/JPEG ekanini tekshiramiz
+    # ---------------------------------------------------------
+    if img_bytes:
+
+        valid_image = False
+
+        try:
+            from PIL import Image
+            import io as _io
+
+            img = Image.open(_io.BytesIO(img_bytes))
+
+            log(
+                f"[Chart] Download rasmi: "
+                f"{img.width}x{img.height}, "
+                f"format={img.format}"
+            )
+
+            if img.width >= 500 and img.height >= 250:
+                valid_image = True
+
+        except Exception as e:
+            log(f"[Chart] Download rasmi tekshirilmadi: {e}")
+
+        if valid_image:
+            log(
+                f"[Chart] Share->Download OK "
+                f"({len(img_bytes) // 1024} KB)"
+            )
+
+            # Modalni yopishga harakat
+            try:
+                close_btn = page.locator(
+                    'button:has-text("Close"), '
+                    '[class*="modal"] button[class*="close"], '
+                    '[aria-label="Close"]'
+                ).first
+
+                if close_btn.count() > 0:
+                    close_btn.click(timeout=1500)
+            except Exception:
+                pass
+
+            return img_bytes
+
+    # ---------------------------------------------------------
+    # 9. Download bo'lmasa xato chiqaramiz.
+    #    _capture_chart() keyin screenshot fallback qiladi.
+    # ---------------------------------------------------------
+    raise Exception(
+        "Share -> Download orqali sifatli grafik olinmadi"
+    )
 
     def _resize_to_target_ratio(self, img_bytes, target_ratio=12 / 7):
         """
