@@ -3,6 +3,7 @@ TOS Alert → Telegram Bot (v5)
 Real-time Finviz screenshot + Yahoo Finance ma'lumotlari
 """
 
+import sys
 import imaplib
 import email
 import time
@@ -21,6 +22,20 @@ from PIL import ImageEnhance
 import io
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# MUHIM: Render/Docker'da stdout odatda BLOK bo'lib buferlanadi (satr
+# bo'yicha emas), shuning uchun print() qilingan loglar darhol emas,
+# katta to'plamlarda kechikib ko'rinishi mumkin — bu esa "kod osilib
+# qoldi" deb noto'g'ri xulosaga olib kelishi mumkin. Shu sababli stdout
+# va stderr'ni majburan satr-bo'yicha (unbuffered) rejimga o'tkazamiz.
+# multiprocessing "spawn" bilan yaratilgan child processlar ham buni
+# meros qilib oladi (environment orqali).
+os.environ["PYTHONUNBUFFERED"] = "1"
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -45,10 +60,13 @@ def start_health_server():
     server.serve_forever()
 
 
-threading.Thread(
-    target=start_health_server,
-    daemon=True
-).start()
+# DIQQAT: bu yerda threading.Thread(...).start() ATAYLAB yo'q — u faqat
+# quyidagi `if __name__ == "__main__":` bloki ichida ishga tushiriladi.
+# Sabab: services/chart.py multiprocessing("spawn") orqali grafik olish
+# uchun yangi Python jarayoni ochganda, "spawn" usuli butun faylni
+# QAYTADAN import qiladi. Agar shu thread module darajasida (import
+# vaqtida) ishga tushirilsa, har bir yangi grafik-jarayon ham xuddi shu
+# portga ulanishga urinib, "Address already in use" xatosini beradi.
 
 
 load_dotenv()
@@ -594,6 +612,8 @@ def imap_idle_loop():
 
 # ── Asosiy tsikl ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    threading.Thread(target=start_health_server, daemon=True).start()
+
     print("🚀 TOS → Telegram bot v6 (IMAP IDLE, Render) ishga tushdi!")
     print(f"   Gmail: {GMAIL_USER}")
     print(f"   Kanal: {TELEGRAM_CHAT_ID}")
