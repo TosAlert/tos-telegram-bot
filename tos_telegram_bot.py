@@ -262,6 +262,20 @@ def calc_macd(closes: pd.Series) -> str:
 YAHOO_CACHE = {}
 YAHOO_CACHE_TTL = 300  # 5 daqiqa
 
+def format_number(n) -> str:
+    n = float(n or 0)
+
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.2f}B"
+
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.2f}M"
+
+    if n >= 1_000:
+        return f"{n/1_000:.2f}K"
+
+    return str(round(n, 2))
+
 
 def get_stock_info(ticker: str) -> dict:
 
