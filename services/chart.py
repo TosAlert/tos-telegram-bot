@@ -717,44 +717,170 @@ def get_chart(ticker):
 # get_chart_and_info(...) / get_chart(...) o'rniga shu quyidagi
 # get_chart_and_info_safe(...) / get_chart_safe(...) chaqirilishi kerak.
 
-import concurrent.futures
+# ---------------------------------------------------------------------------
+# HARD TIMEOUT PROCESS WORKER
+# ---------------------------------------------------------------------------
 
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-
-HARD_TIMEOUT = 90  # soniya
+import multiprocessing as mp
 
 
-def get_chart_and_info_safe(ticker, hard_timeout=HARD_TIMEOUT):
-    """get_chart_and_info'ni hard-timeout bilan himoyalab chaqiradi."""
-    future = _executor.submit(get_chart_and_info, ticker)
+HARD_TIMEOUT = 90
+
+
+def _chart_worker(ticker, mode, queue):
+    """
+    Playwright Sync API alohida process ichida ishlaydi.
+    Shu sababli asyncio bilan to'qnashmaydi.
+    """
+
     try:
-        return future.result(timeout=hard_timeout)
-    except concurrent.futures.TimeoutError:
-        log(f"[Chart] HARD TIMEOUT ({hard_timeout}s) — {ticker} uchun chart olish osilib qoldi")
-        try:
-            if hasattr(browser_manager, "restart"):
-                browser_manager.restart()
-        except Exception as e:
-            log(f"[Chart] Hard timeout restart xato: {e}")
-        return None, None
+
+        print(
+            f"[Chart Worker] START: {ticker} | mode={mode}"
+        )
+
+        if mode == "info":
+
+            result = get_chart_and_info(ticker)
+
+        else:
+
+            result = get_chart(ticker)
+
+        queue.put({
+            "ok": True,
+            "result": result
+        })
+
+        print(
+            f"[Chart Worker] DONE: {ticker}"
+        )
+
     except Exception as e:
-        log(f"[Chart] get_chart_and_info_safe xato: {e}")
-        return None, None
+
+        print(
+            f"[Chart Worker] ERROR: {ticker}: {e}"
+        )
+
+        queue.put({
+            "ok": False,
+            "error": str(e)
+        })
 
 
-def get_chart_safe(ticker, hard_timeout=HARD_TIMEOUT):
-    """get_chart'ni hard-timeout bilan himoyalab chaqiradi."""
-    future = _executor.submit(get_chart, ticker)
-    try:
-        return future.result(timeout=hard_timeout)
-    except concurrent.futures.TimeoutError:
-        log(f"[Chart] HARD TIMEOUT ({hard_timeout}s) — {ticker} uchun chart olish osilib qoldi")
+def _run_chart_process(ticker, mode, hard_timeout):
+
+    ctx = mp.get_context("spawn")
+
+    queue = ctx.Queue()
+
+    process = ctx.Process(
+        target=_chart_worker,
+        args=(
+            ticker,
+            mode,
+            queue
+        )
+    )
+
+    process.start()
+
+    process.join(hard_timeout)
+
+    if process.is_alive():
+
+        print(
+            f"[Chart] HARD TIMEOUT "
+            f"({hard_timeout}s) -> {ticker}"
+        )
+
         try:
-            if hasattr(browser_manager, "restart"):
-                browser_manager.restart()
-        except Exception as e:
-            log(f"[Chart] Hard timeout restart xato: {e}")
+
+            process.terminate()
+            process.join(5)
+
+        except Exception:
+            pass
+
         return None
+
+    if queue.empty():
+
+        print(
+            f"[Chart] Worker natija qaytarmadi: {ticker}"
+        )
+
+        return None
+
+    data = queue.get()
+
+    if not data.get("ok"):
+
+        print(
+            f"[Chart] Worker error: "
+            f"{data.get('error')}"
+        )
+
+        return None
+
+    return data.get("result")
+
+
+def get_chart_and_info_safe(
+    ticker,
+    hard_timeout=HARD_TIMEOUT
+):
+
+    try:
+
+        result = _run_chart_process(
+            ticker,
+            "info",
+            hard_timeout
+        )
+
+        if result:
+
+            print(
+                f"[Chart] SAFE INFO OK: {ticker}"
+            )
+
+        return result
+
     except Exception as e:
-        log(f"[Chart] get_chart_safe xato: {e}")
+
+        print(
+            f"[Chart] get_chart_and_info_safe xato: {e}"
+        )
+
+        return None, None
+
+
+def get_chart_safe(
+    ticker,
+    hard_timeout=HARD_TIMEOUT
+):
+
+    try:
+
+        result = _run_chart_process(
+            ticker,
+            "chart",
+            hard_timeout
+        )
+
+        if result:
+
+            print(
+                f"[Chart] SAFE CHART OK: {ticker}"
+            )
+
+        return result
+
+    except Exception as e:
+
+        print(
+            f"[Chart] get_chart_safe xato: {e}"
+        )
+
         return None
