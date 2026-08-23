@@ -266,31 +266,19 @@ class ChartDownloader:
                         if (!valueCell) return;
                         const value = valueCell.innerText.trim();
                         switch (key) {
-                            case "Sector":
-                                result.sector = value;
-                                break;
-                            case "Industry":
-                                result.industry = value;
-                                break;
-                            case "Market Cap":
-                                result.market_cap = value;
-                                break;
-                            case "Volume":
-                                result.volume = value;
-                                break;
-                            case "Avg Volume":
-                                result.avg_volume = value;
-                                break;
+                            case "Sector": result.sector = value; break;
+                            case "Industry": result.industry = value; break;
+                            case "Market Cap": result.market_cap = value; break;
+                            case "Volume": result.volume = value; break;
+                            case "Avg Volume": result.avg_volume = value; break;
                         }
                     });
 
                     const price = document.querySelector("[data-test='instrument-price-last']");
-                    if (price)
-                        result.price = price.innerText.trim();
+                    if (price) result.price = price.innerText.trim();
 
                     const change = document.querySelector("[data-test='instrument-price-change']");
-                    if (change)
-                        result.change_pct = change.innerText.trim();
+                    if (change) result.change_pct = change.innerText.trim();
 
                     return result;
                 }
@@ -300,26 +288,14 @@ class ChartDownloader:
         except Exception as e:
             log(f"[Finviz Parser] {e}")
             return {
-                "company": "",
-                "sector": "",
-                "industry": "",
-                "price": "",
-                "change_pct": "",
-                "volume": "",
-                "avg_volume": "",
-                "market_cap": ""
+                "company": "", "sector": "", "industry": "", "price": "",
+                "change_pct": "", "volume": "", "avg_volume": "", "market_cap": ""
             }
 
     def _capture_via_share_download(self, page):
-        """
-        Finviz'dagi Share -> Download orqali ORIGINAL yuqori sifatli
-        chart rasmini olish. Har bir bosqich aniq log bilan belgilangan —
-        agar kelajakda yana osilib qolsa, LOG orqali AYNAN qaysi bosqichda
-        to'xtaganini bilib olamiz.
-        """
+        """Finviz Share -> Download orqali original yuqori sifatli chartni oladi."""
         log("[Chart] Share -> Download jarayoni boshlandi")
 
-        # 1) Share tugmasini topish
         share_selectors = [
             '[data-testid="chart-toolbar-publish"]',
             'button:has-text("Share")',
@@ -342,12 +318,10 @@ class ChartDownloader:
         if share_btn is None:
             raise Exception("Share tugmasi topilmadi")
 
-        # 2) Share bosish
         log("[Chart] Share tugmasini bosishga urinilmoqda...")
         self._safe_click(page, share_btn, "Share tugmasi")
         page.wait_for_timeout(1000)
 
-        # 3) Modal aniqlash (majburiy emas)
         log("[Chart] Modal qidirilmoqda...")
         try:
             modal = page.locator(
@@ -362,7 +336,6 @@ class ChartDownloader:
         except Exception:
             pass
 
-        # 4) Spinner bo'lsa kutamiz
         log("[Chart] Spinner tekshirilmoqda...")
         spinner_selectors = [
             '[data-testid="charts-publish-chart-spinner"]',
@@ -385,7 +358,6 @@ class ChartDownloader:
             except Exception:
                 continue
 
-        # 5) Download tugmasini kutish (maks. 20s)
         log("[Chart] Download tugmasi qidirilmoqda...")
         download_selectors = [
             'button:has-text("Download")',
@@ -415,65 +387,108 @@ class ChartDownloader:
         if download_btn is None:
             raise Exception("Share modal ochildi, lekin Download tugmasi 20 soniyada topilmadi")
 
-        # 6) Download eventni kutish
-        log("[Chart] Download bosilmoqda, fayl kutilmoqda...")
+        # 6) Avval Download linkning o'zini ishlatamiz. Bu expect_download()
+        # ga bog'lanmaydi va Finvizning original HD faylini saqlaydi.
         img_bytes = None
+        href = None
         try:
-            with page.expect_download(timeout=30000) as download_info:
-                self._safe_click(page, download_btn, "Download tugmasi")
-            download = download_info.value
-            log(f"[Chart] Download boshlandi: {download.suggested_filename}")
+            href = download_btn.get_attribute("href")
+        except Exception:
+            href = None
 
-            import tempfile
-            import os as _os
-
-            tmp_path = _os.path.join(tempfile.gettempdir(), download.suggested_filename)
-            download.save_as(tmp_path)
-            with open(tmp_path, "rb") as f:
-                img_bytes = f.read()
+        if href and not href.lower().startswith(("javascript:", "#")):
+            log(f"[Chart] Download href topildi: {href[:180]}")
             try:
-                _os.remove(tmp_path)
-            except Exception:
-                pass
+                result = page.evaluate("""
+                    async (href) => {
+                        try {
+                            const url = new URL(href, location.href).href;
+                            const response = await fetch(url, {
+                                credentials: 'include',
+                                cache: 'no-store'
+                            });
+                            if (!response.ok) {
+                                return {ok: false, status: response.status, error: 'HTTP ' + response.status};
+                            }
+                            const buffer = await response.arrayBuffer();
+                            const bytes = new Uint8Array(buffer);
+                            let binary = '';
+                            const chunk = 0x8000;
+                            for (let i = 0; i < bytes.length; i += chunk) {
+                                binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+                            }
+                            return {
+                                ok: true,
+                                status: response.status,
+                                contentType: response.headers.get('content-type') || '',
+                                base64: btoa(binary)
+                            };
+                        } catch (e) {
+                            return {ok: false, error: String(e)};
+                        }
+                    }
+                """, href)
 
-            log(f"[Chart] Download fayli olindi: {len(img_bytes) // 1024} KB")
-        except Exception as e:
-            log(f"[Chart] Download event xato: {e}")
+                if result and result.get("ok") and result.get("base64"):
+                    import base64
+                    img_bytes = base64.b64decode(result["base64"])
+                    log(
+                        f"[Chart] Original HD fayl HTTP orqali olindi: "
+                        f"{len(img_bytes) // 1024} KB, {result.get('contentType', '')}"
+                    )
+                else:
+                    log(f"[Chart] Direct Download xato: {result}")
+            except Exception as e:
+                log(f"[Chart] Direct Download exception: {e}")
+        else:
+            log("[Chart] Download href mavjud emas -> browser download fallback")
 
-        # 7) Rasm haqiqiyligini tekshirish
+        # 7) href ishlamasa, qisqa browser-download fallback.
+        if not img_bytes:
+            log("[Chart] Browser Download fallback ishga tushdi...")
+            try:
+                with page.expect_download(timeout=10000) as download_info:
+                    self._safe_click(page, download_btn, "Download tugmasi")
+                download = download_info.value
+                log(f"[Chart] Download boshlandi: {download.suggested_filename}")
+
+                import tempfile
+                import os as _os
+                tmp_path = _os.path.join(tempfile.gettempdir(), download.suggested_filename)
+                download.save_as(tmp_path)
+                with open(tmp_path, "rb") as f:
+                    img_bytes = f.read()
+                try:
+                    _os.remove(tmp_path)
+                except Exception:
+                    pass
+                log(f"[Chart] Download fayli olindi: {len(img_bytes) // 1024} KB")
+            except Exception as e:
+                log(f"[Chart] Browser Download fallback xato: {e}")
+
         if img_bytes:
-            valid_image = False
             try:
                 from PIL import Image
                 import io as _io
-
                 img = Image.open(_io.BytesIO(img_bytes))
                 log(f"[Chart] Download rasmi: {img.width}x{img.height}, format={img.format}")
                 if img.width >= 500 and img.height >= 250:
-                    valid_image = True
+                    log(f"[Chart] Share->Download OK ({len(img_bytes) // 1024} KB)")
+                    try:
+                        close_btn = page.locator(
+                            'button:has-text("Close"), [class*="modal"] button[class*="close"], [aria-label="Close"]'
+                        ).first
+                        if close_btn.count() > 0:
+                            close_btn.click(timeout=1500)
+                    except Exception:
+                        pass
+                    return img_bytes
             except Exception as e:
-                log(f"[Chart] Download rasmi tekshirilmadi: {e}")
-
-            if valid_image:
-                log(f"[Chart] Share->Download OK ({len(img_bytes) // 1024} KB)")
-                try:
-                    close_btn = page.locator(
-                        'button:has-text("Close"), [class*="modal"] button[class*="close"], [aria-label="Close"]'
-                    ).first
-                    if close_btn.count() > 0:
-                        close_btn.click(timeout=1500)
-                except Exception:
-                    pass
-                return img_bytes
+                log(f"[Chart] Download rasmi tekshirilmagan: {e}")
 
         raise Exception("Share -> Download orqali sifatli grafik olinmadi")
 
     def _resize_to_target_ratio(self, img_bytes, target_ratio=12 / 7):
-        """
-        Rasmni berilgan en:bo'y nisbatiga moslaydi. Finviz rasmi juda keng
-        chiqadi — kenglikni markazdan kesib (crop), grafik mazmuni ramkani
-        to'liq to'ldiradigan qilamiz.
-        """
         from PIL import Image
         import io as _io
 
@@ -539,7 +554,8 @@ class ChartDownloader:
         except Exception as e:
             log(f"[Chart] Share->Download muvaffaqiyatsiz: {e}")
 
-        log("[Chart] Zaxira usul: screenshot")
+        # Fallback faqat Share/Download ishlamaganida. Asosiy yo'l HD download.
+        log("[Chart] Zaxira usul: chart element screenshot")
         chart = self._find_chart(page)
         if chart:
             try:
@@ -547,37 +563,21 @@ class ChartDownloader:
                 if box:
                     log(f"[Chart] Size : {int(box['width'])}x{int(box['height'])}")
                     if box["width"] < 400 or box["height"] < 200:
-                        log("[Chart] Element too small, page screenshot ga o'tamiz")
                         raise ValueError("Element too small")
 
-                img = chart.screenshot(type="png")
+                img = chart.screenshot(type="png", animations="disabled")
                 if _is_image_dark(img):
-                    log("[Chart] ⚠️ Screenshot ham dark, page screenshot ga o'tamiz")
                     raise ValueError("Screenshot dark")
 
-                log(f"[Chart] Chart screenshot OK ({len(img)//1024} KB)")
+                log(f"[Chart] Chart screenshot fallback OK ({len(img)//1024} KB)")
                 return img
             except Exception as e:
                 log(f"[Chart] Canvas screenshot failed : {e}")
 
-        log("[Chart] Canvas topilmadi -> Page screenshot")
-        try:
-            img = page.screenshot(
-                clip={"x": 0, "y": 140, "width": 1600, "height": 850},
-                type="png",
-            )
-            log(f"[Chart] Page screenshot OK ({len(img)//1024} KB)")
-            return img
-        except Exception as e:
-            log(f"[Chart] Page screenshot ham muvaffaqiyatsiz: {e}")
-            return None
+        return None
 
 
 def get_chart_and_info(ticker):
-    """
-    Bitta Finviz sahifa ochilishidan HAM grafik, HAM matnli ma'lumotlarni oladi.
-    Qaytaradi: (img_bytes, info_dict)
-    """
     page = None
     try:
         downloader = ChartDownloader()
@@ -682,22 +682,10 @@ def get_chart(ticker):
 # ---------------------------------------------------------------------------
 # HARD TIMEOUT PROCESS WORKER
 # ---------------------------------------------------------------------------
-# Ikki qatlamli himoya:
-#   1) TASHQI: alohida process (multiprocessing) + process.join(hard_timeout)
-#      — agar worker javob bermasa, majburan terminate qilinadi.
-#   2) ICHKI: worker process ichida signal.alarm(...) — agar biror
-#      Playwright chaqiruvi o'zining timeout'ini ham hurmat qilmay abadiy
-#      osilib qolsa (kuzatilgan holat), worker ICHIDAN o'zi vaqtida
-#      TimeoutError chiqarib to'xtaydi, tashqi watchdog kutmasdan.
-#
-# MUHIM: bot faylida to'g'ridan-to'g'ri get_chart_and_info(...) /
-# get_chart(...) o'rniga quyidagi get_chart_and_info_safe(...) /
-# get_chart_safe(...) chaqirilishi kerak.
-
 import multiprocessing as mp
 
 HARD_TIMEOUT = 90
-INNER_ALARM_TIMEOUT = 75  # tashqi 90s dan kamroq — ichki alarm birinchi ishga tushsin
+INNER_ALARM_TIMEOUT = 75
 
 
 class _InnerHardTimeout(Exception):
@@ -709,39 +697,26 @@ def _alarm_handler(signum, frame):
 
 
 def _chart_worker(ticker, mode, queue):
-    """
-    Playwright Sync API alohida process ichida ishlaydi (asyncio bilan
-    to'qnashmasligi uchun). Ichida qo'shimcha signal.alarm bilan
-    himoyalangan — Playwright'ning o'zi hech qachon abadiy osilib
-    qolmasligini kafolatlaydi.
-    """
     try:
         signal.signal(signal.SIGALRM, _alarm_handler)
         signal.alarm(INNER_ALARM_TIMEOUT)
     except Exception as e:
-        # signal faqat asosiy thread'da va Unix'da ishlaydi — Render/Linux
-        # uchun bu muammo bo'lmasligi kerak, lekin ehtiyot uchun try/except
         print(f"[Chart Worker] signal.alarm sozlanmadi: {e}", flush=True)
 
     try:
         print(f"[Chart Worker] START: {ticker} | mode={mode}", flush=True)
-
         if mode == "info":
             result = get_chart_and_info(ticker)
         else:
             result = get_chart(ticker)
-
         queue.put({"ok": True, "result": result})
         print(f"[Chart Worker] DONE: {ticker}", flush=True)
-
     except _InnerHardTimeout:
         print(f"[Chart Worker] ICHKI HARD TIMEOUT ({INNER_ALARM_TIMEOUT}s): {ticker}", flush=True)
         queue.put({"ok": False, "error": "inner_hard_timeout"})
-
     except Exception as e:
         print(f"[Chart Worker] ERROR: {ticker}: {e}", flush=True)
         queue.put({"ok": False, "error": str(e)})
-
     finally:
         try:
             signal.alarm(0)
@@ -776,7 +751,6 @@ def _run_chart_process(ticker, mode, hard_timeout):
     if not data.get("ok"):
         print(f"[Chart] Worker error: {data.get('error')}", flush=True)
         return None
-
     return data.get("result")
 
 
