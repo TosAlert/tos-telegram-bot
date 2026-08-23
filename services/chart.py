@@ -1,4 +1,6 @@
 import re
+import signal
+import time
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from playwright.sync_api import Error, TimeoutError
@@ -18,7 +20,7 @@ DEBUG = True
 
 def log(*args, **kwargs):
     if DEBUG:
-        print(*args, **kwargs)
+        print(*args, **kwargs, flush=True)
 
 
 def _force_light_url(url):
@@ -125,7 +127,7 @@ class ChartDownloader:
             log(f"[Chart] {label} mouse click xato: {e}")
 
         try:
-            locator.evaluate("el => el.click()")
+            locator.evaluate("el => el.click()", timeout=4000)
             log(f"[Chart] {label} bosildi (JS click)")
         except Exception as e:
             log(f"[Chart] {label} JS click ham xato: {e}")
@@ -135,9 +137,6 @@ class ChartDownloader:
         page = browser_manager.new_page()
         self._block_ads(page)
 
-        # Playwright'ning o'zining color-scheme emulyatsiyasi — bu sayt
-        # ichidagi JS/CSS o'zgarishlariga qaraganda ancha ishonchli, chunki
-        # brauzerning o'zi "prefers-color-scheme: light" deb hisoblaydi
         try:
             page.emulate_media(color_scheme="light")
         except Exception as e:
@@ -165,11 +164,7 @@ class ChartDownloader:
             log("[Chart] First timeout -> retry")
             page.goto(url, wait_until="commit", timeout=30000)
 
-        page.set_viewport_size({
-            "width": 1100,
-            "height": 850,
-        })
-
+        page.set_viewport_size({"width": 1100, "height": 850})
         page.wait_for_timeout(1500)
 
         try:
@@ -316,121 +311,118 @@ class ChartDownloader:
             }
 
     def _capture_via_share_download(self, page):
-        try:
-            page.evaluate("""
-                () => {
-                    document.querySelectorAll(
-                        '[class*="ic_dimm"], [class*="ic_under"], [class*="ic_fade"], [class*="overlay"]'
-                    ).forEach(el => {
-                        el.style.pointerEvents = 'none';
-                        el.style.display = 'none';
-                    });
-                }
-            """)
-        except Exception:
-            pass
+        """
+        Finviz'dagi Share -> Download orqali ORIGINAL yuqori sifatli
+        chart rasmini olish. Har bir bosqich aniq log bilan belgilangan —
+        agar kelajakda yana osilib qolsa, LOG orqali AYNAN qaysi bosqichda
+        to'xtaganini bilib olamiz.
+        """
+        log("[Chart] Share -> Download jarayoni boshlandi")
 
-        share_btn = page.locator(
-            '[data-testid="chart-toolbar-publish"], button:has-text("Share"), a:has-text("Share"), [class*="share"]:has-text("Share")'
-        ).first
-        share_btn.wait_for(state="visible", timeout=12000)
-        self._safe_click(page, share_btn, "Share tugmasi")
-
-        try:
-            page.wait_for_selector('text="Share Chart"', timeout=6000)
-            log("[Chart] 'Share Chart' modal topildi")
-        except Exception:
-            log("[Chart] 'Share Chart' matni topilmadi, qayta urinamiz")
-            # Ehtimol noto'g'ri "Share" elementi bosilgan — data-testid
-            # orqali aniq elementga qayta urinib ko'ramiz
-            try:
-                precise_btn = page.locator('[data-testid="chart-toolbar-publish"]').first
-                if precise_btn.count() > 0:
-                    self._safe_click(page, precise_btn, "Share tugmasi (aniq)")
-                    page.wait_for_selector('text="Share Chart"', timeout=6000)
-                    log("[Chart] 'Share Chart' modal ikkinchi urinishda topildi")
-            except Exception:
-                log("[Chart] 'Share Chart' modal ikkinchi urinishda ham topilmadi, davom etamiz")
-
-        page.wait_for_timeout(1500)
-
-        try:
-            page.evaluate("""
-                () => {
-                    document.querySelectorAll(
-                        '[class*="ic_dimm"], [class*="ic_under"], [class*="ic_fade"]'
-                    ).forEach(el => {
-                        el.style.pointerEvents = 'none';
-                    });
-                }
-            """)
-        except Exception:
-            pass
-
-        # Modal ichida grafik hali generatsiya qilinayotgan bo'lishi mumkin
-        # (spinner ko'rinadi) — shu tugamaguncha Download tugmasi paydo
-        # bo'lmaydi, shuning uchun avval spinner yo'qolishini kutamiz
-        try:
-            page.wait_for_selector(
-                '[data-testid="charts-publish-chart-spinner"]',
-                state="hidden",
-                timeout=20000,
-            )
-            log("[Chart] Spinner tugadi, grafik tayyor")
-        except Exception:
-            log("[Chart] Spinner kutish vaqti tugadi, baribir davom etamiz")
-
-        page.wait_for_timeout(500)
-
-        download_selectors = [
-            'button:has-text("Download")',
-            'a:has-text("Download")',
-            '[class*="download"]',
-            'button[title*="Download" i]',
-            'a[download]',
+        # 1) Share tugmasini topish
+        share_selectors = [
+            '[data-testid="chart-toolbar-publish"]',
+            'button:has-text("Share")',
+            'a:has-text("Share")',
+            '[class*="share"]:has-text("Share")',
         ]
 
-        download_btn = None
-        for sel in download_selectors:
+        share_btn = None
+        for sel in share_selectors:
             try:
                 loc = page.locator(sel).first
                 if loc.count() > 0:
-                    loc.wait_for(state="visible", timeout=3000)
-                    download_btn = loc
-                    log(f"[Chart] Download tugma topildi: {sel}")
+                    loc.wait_for(state="visible", timeout=4000)
+                    share_btn = loc
+                    log(f"[Chart] Share tugmasi topildi: {sel}")
                     break
             except Exception:
                 continue
 
+        if share_btn is None:
+            raise Exception("Share tugmasi topilmadi")
+
+        # 2) Share bosish
+        log("[Chart] Share tugmasini bosishga urinilmoqda...")
+        self._safe_click(page, share_btn, "Share tugmasi")
+        page.wait_for_timeout(1000)
+
+        # 3) Modal aniqlash (majburiy emas)
+        log("[Chart] Modal qidirilmoqda...")
+        try:
+            modal = page.locator(
+                '[role="dialog"], [class*="modal"], [class*="dialog"], [data-testid*="publish"]'
+            ).first
+            if modal.count() > 0:
+                try:
+                    modal.wait_for(state="visible", timeout=3000)
+                    log("[Chart] Share modal topildi")
+                except Exception:
+                    log("[Chart] Modal aniq topilmadi, davom etamiz")
+        except Exception:
+            pass
+
+        # 4) Spinner bo'lsa kutamiz
+        log("[Chart] Spinner tekshirilmoqda...")
+        spinner_selectors = [
+            '[data-testid="charts-publish-chart-spinner"]',
+            '[class*="spinner"]',
+            '[class*="loading"]',
+        ]
+        for sel in spinner_selectors:
+            try:
+                spinner = page.locator(sel).first
+                if spinner.count() == 0:
+                    continue
+                if spinner.is_visible():
+                    log(f"[Chart] Spinner topildi: {sel}")
+                    try:
+                        spinner.wait_for(state="hidden", timeout=15000)
+                        log("[Chart] Spinner tugadi")
+                    except Exception:
+                        log("[Chart] Spinner timeout -> davom etamiz")
+                    break
+            except Exception:
+                continue
+
+        # 5) Download tugmasini kutish (maks. 20s)
+        log("[Chart] Download tugmasi qidirilmoqda...")
+        download_selectors = [
+            'button:has-text("Download")',
+            'a:has-text("Download")',
+            'button[title*="Download" i]',
+            'a[download]',
+            '[data-testid*="download"]',
+            '[class*="download"]',
+        ]
+
+        download_btn = None
+        start_time = time.time()
+        while time.time() - start_time < 20:
+            for sel in download_selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() > 0 and loc.is_visible():
+                        download_btn = loc
+                        log(f"[Chart] Download tugmasi topildi: {sel}")
+                        break
+                except Exception:
+                    continue
+            if download_btn is not None:
+                break
+            page.wait_for_timeout(500)
+
         if download_btn is None:
-            raise Exception("Download tugmasi topilmadi")
+            raise Exception("Share modal ochildi, lekin Download tugmasi 20 soniyada topilmadi")
 
-        # Chart so'rovining URL'ini ushlab olamiz (zaxira uchun)
-        captured_url = {"value": None}
-
-        def _on_request(request):
-            u = request.url
-            low = u.lower()
-            if (("chart.ashx" in low)
-                    or ("finviz.com/chart" in low)
-                    or ("charts" in low and "finviz" in low)):
-                captured_url["value"] = u
-
-        def _on_response(response):
-            u = response.url
-            low = u.lower()
-            ct = (response.headers or {}).get("content-type", "")
-            if "image" in ct.lower() and "finviz" in low:
-                captured_url["value"] = u
-
-        page.on("request", _on_request)
-        page.on("response", _on_response)
-
+        # 6) Download eventni kutish
+        log("[Chart] Download bosilmoqda, fayl kutilmoqda...")
         img_bytes = None
         try:
-            with page.expect_download(timeout=15000) as download_info:
+            with page.expect_download(timeout=30000) as download_info:
                 self._safe_click(page, download_btn, "Download tugmasi")
             download = download_info.value
+            log(f"[Chart] Download boshlandi: {download.suggested_filename}")
 
             import tempfile
             import os as _os
@@ -443,47 +435,38 @@ class ChartDownloader:
                 _os.remove(tmp_path)
             except Exception:
                 pass
-        finally:
-            try:
-                page.remove_listener("request", _on_request)
-            except Exception:
-                pass
-            try:
-                page.remove_listener("response", _on_response)
-            except Exception:
-                pass
 
-        # Zaxira: URL'da tema dark bo'lsa, light ga o'zgartirib qayta yuklaymiz
-        src_url = captured_url["value"]
-        if src_url and "theme=dark" in src_url.lower():
-            light_url = _force_light_url(src_url)
-            if light_url and light_url != src_url:
-                log(f"[Chart] Dark chart URL topildi, light ga o'zgartirildi:\n {light_url}")
+            log(f"[Chart] Download fayli olindi: {len(img_bytes) // 1024} KB")
+        except Exception as e:
+            log(f"[Chart] Download event xato: {e}")
+
+        # 7) Rasm haqiqiyligini tekshirish
+        if img_bytes:
+            valid_image = False
+            try:
+                from PIL import Image
+                import io as _io
+
+                img = Image.open(_io.BytesIO(img_bytes))
+                log(f"[Chart] Download rasmi: {img.width}x{img.height}, format={img.format}")
+                if img.width >= 500 and img.height >= 250:
+                    valid_image = True
+            except Exception as e:
+                log(f"[Chart] Download rasmi tekshirilmadi: {e}")
+
+            if valid_image:
+                log(f"[Chart] Share->Download OK ({len(img_bytes) // 1024} KB)")
                 try:
-                    resp = page.request.get(light_url, timeout=15000)
-                    if resp.ok:
-                        body = resp.body()
-                        if body and len(body) > 1000:
-                            img_bytes = body
-                            log("[Chart] Light versiya URL orqali yuklandi")
-                except Exception as e:
-                    log(f"[Chart] Light URL yuklashda xato: {e}")
+                    close_btn = page.locator(
+                        'button:has-text("Close"), [class*="modal"] button[class*="close"], [aria-label="Close"]'
+                    ).first
+                    if close_btn.count() > 0:
+                        close_btn.click(timeout=1500)
+                except Exception:
+                    pass
+                return img_bytes
 
-        if not img_bytes:
-            raise Exception("Download rasmi olinmadi")
-
-        log(f"[Chart] Share->Download OK ({len(img_bytes)//1024} KB)")
-
-        try:
-            close_btn = page.locator(
-                'button:has-text("Close"), [class*="modal"] button[class*="close"]'
-            ).first
-            if close_btn.count() > 0:
-                close_btn.click(timeout=1000)
-        except Exception:
-            pass
-
-        return img_bytes
+        raise Exception("Share -> Download orqali sifatli grafik olinmadi")
 
     def _resize_to_target_ratio(self, img_bytes, target_ratio=12 / 7):
         """
@@ -602,15 +585,15 @@ def get_chart_and_info(ticker):
         info = downloader.parse_finviz_info(page)
         img = downloader._capture_chart(page)
         if img:
-            print(f"[Chart] Finviz OK : {ticker}")
+            print(f"[Chart] Finviz OK : {ticker}", flush=True)
             return img, info
-        print(f"[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz")
+        print("[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz", flush=True)
     except TimeoutError as e:
-        print(f"[Chart] Timeout : {e}")
+        print(f"[Chart] Timeout : {e}", flush=True)
     except Error as e:
-        print(f"[Chart] Playwright Error : {e}")
+        print(f"[Chart] Playwright Error : {e}", flush=True)
     except Exception as e:
-        print(f"[Chart] Error : {e}")
+        print(f"[Chart] Error : {e}", flush=True)
     finally:
         try:
             if page:
@@ -618,27 +601,24 @@ def get_chart_and_info(ticker):
         except Exception:
             pass
 
-    # Brauzer "crashed" bo'lgan bo'lishi mumkin — mavjud bo'lsa qayta ishga
-    # tushiramiz, toza holatdan boshlash uchun
     try:
         if hasattr(browser_manager, "restart"):
             browser_manager.restart()
     except Exception as e:
-        print(f"[Chart] Browser restart xato: {e}")
+        print(f"[Chart] Browser restart xato: {e}", flush=True)
 
-    # Qayta urinish (toza sahifa bilan)
     page = None
     try:
-        print(f"[Chart] Qayta urinish : {ticker}")
+        print(f"[Chart] Qayta urinish : {ticker}", flush=True)
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
         info = downloader.parse_finviz_info(page)
         img = downloader._capture_chart(page)
         if img:
-            print(f"[Chart] Qayta urinishda OK : {ticker}")
+            print(f"[Chart] Qayta urinishda OK : {ticker}", flush=True)
         return img, info
     except Exception as e:
-        print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}")
+        print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}", flush=True)
     finally:
         try:
             if page:
@@ -656,15 +636,15 @@ def get_chart(ticker):
         page = downloader._open_page(ticker)
         img = downloader._capture_chart(page)
         if img:
-            print(f"[Chart] Finviz OK : {ticker}")
+            print(f"[Chart] Finviz OK : {ticker}", flush=True)
             return img
-        print(f"[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz")
+        print("[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz", flush=True)
     except TimeoutError as e:
-        print(f"[Chart] Timeout : {e}")
+        print(f"[Chart] Timeout : {e}", flush=True)
     except Error as e:
-        print(f"[Chart] Playwright Error : {e}")
+        print(f"[Chart] Playwright Error : {e}", flush=True)
     except Exception as e:
-        print(f"[Chart] Error : {e}")
+        print(f"[Chart] Error : {e}", flush=True)
     finally:
         try:
             if page:
@@ -672,25 +652,23 @@ def get_chart(ticker):
         except Exception:
             pass
 
-    # Brauzer "crashed" bo'lgan bo'lishi mumkin — mavjud bo'lsa qayta ishga
-    # tushiramiz, toza holatdan boshlash uchun
     try:
         if hasattr(browser_manager, "restart"):
             browser_manager.restart()
     except Exception as e:
-        print(f"[Chart] Browser restart xato: {e}")
+        print(f"[Chart] Browser restart xato: {e}", flush=True)
 
     page = None
     try:
-        print(f"[Chart] Qayta urinish : {ticker}")
+        print(f"[Chart] Qayta urinish : {ticker}", flush=True)
         downloader = ChartDownloader()
         page = downloader._open_page(ticker)
         img = downloader._capture_chart(page)
         if img:
-            print(f"[Chart] Qayta urinishda OK : {ticker}")
+            print(f"[Chart] Qayta urinishda OK : {ticker}", flush=True)
         return img
     except Exception as e:
-        print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}")
+        print(f"[Chart] Qayta urinish ham muvaffaqiyatsiz : {e}", flush=True)
     finally:
         try:
             if page:
@@ -704,143 +682,121 @@ def get_chart(ticker):
 # ---------------------------------------------------------------------------
 # HARD TIMEOUT PROCESS WORKER
 # ---------------------------------------------------------------------------
+# Ikki qatlamli himoya:
+#   1) TASHQI: alohida process (multiprocessing) + process.join(hard_timeout)
+#      — agar worker javob bermasa, majburan terminate qilinadi.
+#   2) ICHKI: worker process ichida signal.alarm(...) — agar biror
+#      Playwright chaqiruvi o'zining timeout'ini ham hurmat qilmay abadiy
+#      osilib qolsa (kuzatilgan holat), worker ICHIDAN o'zi vaqtida
+#      TimeoutError chiqarib to'xtaydi, tashqi watchdog kutmasdan.
+#
+# MUHIM: bot faylida to'g'ridan-to'g'ri get_chart_and_info(...) /
+# get_chart(...) o'rniga quyidagi get_chart_and_info_safe(...) /
+# get_chart_safe(...) chaqirilishi kerak.
 
 import multiprocessing as mp
 
-
 HARD_TIMEOUT = 90
+INNER_ALARM_TIMEOUT = 75  # tashqi 90s dan kamroq — ichki alarm birinchi ishga tushsin
+
+
+class _InnerHardTimeout(Exception):
+    pass
+
+
+def _alarm_handler(signum, frame):
+    raise _InnerHardTimeout("Ichki signal.alarm timeout")
 
 
 def _chart_worker(ticker, mode, queue):
     """
-    Playwright Sync API alohida PROCESS ichida ishlaydi.
-
-    Muhim:
-    Playwright sync API thread ichida emas, alohida process ichida
-    ishga tushadi. Shu sababli asyncio/thread konflikt bo'lmaydi.
+    Playwright Sync API alohida process ichida ishlaydi (asyncio bilan
+    to'qnashmasligi uchun). Ichida qo'shimcha signal.alarm bilan
+    himoyalangan — Playwright'ning o'zi hech qachon abadiy osilib
+    qolmasligini kafolatlaydi.
     """
     try:
+        signal.signal(signal.SIGALRM, _alarm_handler)
+        signal.alarm(INNER_ALARM_TIMEOUT)
+    except Exception as e:
+        # signal faqat asosiy thread'da va Unix'da ishlaydi — Render/Linux
+        # uchun bu muammo bo'lmasligi kerak, lekin ehtiyot uchun try/except
+        print(f"[Chart Worker] signal.alarm sozlanmadi: {e}", flush=True)
+
+    try:
+        print(f"[Chart Worker] START: {ticker} | mode={mode}", flush=True)
+
         if mode == "info":
             result = get_chart_and_info(ticker)
         else:
             result = get_chart(ticker)
 
-        queue.put(("ok", result))
+        queue.put({"ok": True, "result": result})
+        print(f"[Chart Worker] DONE: {ticker}", flush=True)
+
+    except _InnerHardTimeout:
+        print(f"[Chart Worker] ICHKI HARD TIMEOUT ({INNER_ALARM_TIMEOUT}s): {ticker}", flush=True)
+        queue.put({"ok": False, "error": "inner_hard_timeout"})
 
     except Exception as e:
-        queue.put(("error", str(e)))
-
-
-def _run_chart_process(ticker, mode, hard_timeout=HARD_TIMEOUT):
-    """
-    Chart olishni alohida processda bajaradi.
-    Process osilib qolsa, hard timeoutdan keyin majburan to'xtatiladi.
-    """
-
-    ctx = mp.get_context("spawn")
-    queue = ctx.Queue()
-
-    process = ctx.Process(
-        target=_chart_worker,
-        args=(ticker, mode, queue),
-        daemon=True,
-    )
-
-    try:
-        print(f"[Chart] Process worker START: {ticker}")
-
-        process.start()
-        process.join(hard_timeout)
-
-        if process.is_alive():
-            print(
-                f"[Chart] HARD TIMEOUT ({hard_timeout}s) "
-                f"— {ticker} process majburan to'xtatilmoqda"
-            )
-
-            process.terminate()
-            process.join(10)
-
-            if process.is_alive():
-                try:
-                    process.kill()
-                except Exception:
-                    pass
-
-            return None
-
-        if queue.empty():
-            print(f"[Chart] {ticker}: worker natija qaytarmadi")
-            return None
-
-        status, result = queue.get_nowait()
-
-        if status == "ok":
-            print(f"[Chart] Process worker OK: {ticker}")
-            return result
-
-        print(f"[Chart] Worker xato: {ticker}: {result}")
-        return None
-
-    except Exception as e:
-        print(f"[Chart] Process worker exception: {ticker}: {e}")
-
-        try:
-            if process.is_alive():
-                process.terminate()
-                process.join(5)
-        except Exception:
-            pass
-
-        return None
+        print(f"[Chart Worker] ERROR: {ticker}: {e}", flush=True)
+        queue.put({"ok": False, "error": str(e)})
 
     finally:
         try:
-            queue.close()
+            signal.alarm(0)
         except Exception:
             pass
 
+
+def _run_chart_process(ticker, mode, hard_timeout):
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue()
+    process = ctx.Process(target=_chart_worker, args=(ticker, mode, queue))
+    process.start()
+    process.join(hard_timeout)
+
+    if process.is_alive():
+        print(f"[Chart] TASHQI HARD TIMEOUT ({hard_timeout}s) -> {ticker}", flush=True)
         try:
-            queue.join_thread()
+            process.terminate()
+            process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join(3)
         except Exception:
             pass
+        return None
+
+    if queue.empty():
+        print(f"[Chart] Worker natija qaytarmadi: {ticker}", flush=True)
+        return None
+
+    data = queue.get()
+    if not data.get("ok"):
+        print(f"[Chart] Worker error: {data.get('error')}", flush=True)
+        return None
+
+    return data.get("result")
 
 
 def get_chart_and_info_safe(ticker, hard_timeout=HARD_TIMEOUT):
-    """
-    get_chart_and_info() ni xavfsiz alohida processda ishga tushiradi.
-    """
-
-    result = _run_chart_process(
-        ticker,
-        "info",
-        hard_timeout,
-    )
-
-    if result is None:
-        print(
-            f"[Chart] get_chart_and_info_safe: "
-            f"{ticker} uchun grafik olinmadi"
-        )
-
-    return result if result is not None else (None, None)
+    try:
+        result = _run_chart_process(ticker, "info", hard_timeout)
+        if result:
+            print(f"[Chart] SAFE INFO OK: {ticker}", flush=True)
+        return result if result else (None, None)
+    except Exception as e:
+        print(f"[Chart] get_chart_and_info_safe xato: {e}", flush=True)
+        return None, None
 
 
 def get_chart_safe(ticker, hard_timeout=HARD_TIMEOUT):
-    """
-    get_chart() ni xavfsiz alohida processda ishga tushiradi.
-    """
-
-    result = _run_chart_process(
-        ticker,
-        "chart",
-        hard_timeout,
-    )
-
-    if result is None:
-        print(
-            f"[Chart] get_chart_safe: "
-            f"{ticker} uchun grafik olinmadi"
-        )
-
-    return result
+    try:
+        result = _run_chart_process(ticker, "chart", hard_timeout)
+        if result:
+            print(f"[Chart] SAFE CHART OK: {ticker}", flush=True)
+        return result
+    except Exception as e:
+        print(f"[Chart] get_chart_safe xato: {e}", flush=True)
+        return None
