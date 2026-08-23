@@ -1,0 +1,95 @@
+name: Fix chart quality
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch chart capture
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          chart = Path("services/chart.py")
+          text = chart.read_text(encoding="utf-8")
+
+          start = text.index("    def _capture_chart(self, page):")
+          end = text.index("\n\ndef get_chart_and_info", start)
+
+          new_func = '''    def _capture_chart(self, page):
+        """Avval yuqori DPI canvas screenshot oladi; Share->Download faqat zaxira."""
+        log("[Chart] High-quality canvas screenshot -> asosiy usul")
+
+        chart = self._find_chart(page)
+        if chart:
+            try:
+                box = chart.bounding_box()
+                if box:
+                    log(f"[Chart] High-quality chart size: {int(box['width'])}x{int(box['height'])}")
+                    if box["width"] >= 700 and box["height"] >= 300:
+                        img = chart.screenshot(type="png", animations="disabled")
+                        from PIL import Image
+                        import io as _io
+                        im = Image.open(_io.BytesIO(img))
+                        log(f"[Chart] High-quality screenshot: {im.width}x{im.height}, {len(img)//1024} KB")
+                        if im.width >= 900 and im.height >= 400 and not _is_image_dark(img):
+                            log("[Chart] High-quality canvas screenshot OK")
+                            return img
+            except Exception as e:
+                log(f"[Chart] High-quality screenshot failed: {e}")
+
+        log("[Chart] Canvas yetarli bo'lmasa -> Finviz Share -> Download zaxira usuli")
+        try:
+            img = self._capture_via_share_download(page)
+            if img:
+                return img
+        except Exception as e:
+            log(f"[Chart] Share->Download muvaffaqiyatsiz: {e}")
+
+        # Oxirgi zaxira: oddiy chart element screenshot.
+        chart = self._find_chart(page)
+        if chart:
+            try:
+                box = chart.bounding_box()
+                if box:
+                    log(f"[Chart] Final chart size: {int(box['width'])}x{int(box['height'])}")
+                img = chart.screenshot(type="png", animations="disabled")
+                if not _is_image_dark(img):
+                    log(f"[Chart] Final screenshot OK ({len(img)//1024} KB)")
+                    return img
+            except Exception as e:
+                log(f"[Chart] Final screenshot failed: {e}")
+
+        return None
+'''
+
+          text = text[:start] + new_func + text[end:]
+          chart.write_text(text, encoding="utf-8")
+
+          browser = Path("services/browser.py")
+          b = browser.read_text(encoding="utf-8")
+          b2 = b.replace('"device_scale_factor": 1,', '"device_scale_factor": 2,')
+          if b2 == b:
+              raise SystemExit("device_scale_factor line not found")
+          browser.write_text(b2, encoding="utf-8")
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/chart.py services/browser.py
+          git diff --cached --quiet && exit 0
+          git commit -m "Use high DPI chart screenshot as primary capture"
+          git push
