@@ -702,59 +702,145 @@ def get_chart(ticker):
 
 
 # ---------------------------------------------------------------------------
-# Hard-timeout watchdog
+# HARD TIMEOUT PROCESS WORKER
 # ---------------------------------------------------------------------------
-# get_chart / get_chart_and_info ichidagi barcha Playwright wait/click
-# chaqiruvlarida timeout bor. Lekin agar Chromium sub-processi butunlay
-# javob berishni to'xtatib qo'ysa (crash bo'lib process o'zi o'lmasa), sync
-# Playwright ba'zan shu timeout'larni ham hurmat qilmay ichki IPC darajasida
-# abadiy kutib qolishi mumkin. Shuning uchun butun chaqiruvni alohida
-# thread'da ishga tushirib, tashqi "hard" vaqt chegarasi qo'yamiz — agar
-# shu vaqt ichida tugamasa, brauzer majburan restart qilinadi va bot butunlay
-# bloklanib qolmaydi.
-#
-# MUHIM: bot faylida (masalan tos_telegram_bot.py) endi to'g'ridan-to'g'ri
-# get_chart_and_info(...) / get_chart(...) o'rniga shu quyidagi
-# get_chart_and_info_safe(...) / get_chart_safe(...) chaqirilishi kerak.
 
-import concurrent.futures
+import multiprocessing as mp
 
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
-HARD_TIMEOUT = 90  # soniya
+HARD_TIMEOUT = 90
+
+
+def _chart_worker(ticker, mode, queue):
+    """
+    Playwright Sync API alohida PROCESS ichida ishlaydi.
+
+    Muhim:
+    Playwright sync API thread ichida emas, alohida process ichida
+    ishga tushadi. Shu sababli asyncio/thread konflikt bo'lmaydi.
+    """
+    try:
+        if mode == "info":
+            result = get_chart_and_info(ticker)
+        else:
+            result = get_chart(ticker)
+
+        queue.put(("ok", result))
+
+    except Exception as e:
+        queue.put(("error", str(e)))
+
+
+def _run_chart_process(ticker, mode, hard_timeout=HARD_TIMEOUT):
+    """
+    Chart olishni alohida processda bajaradi.
+    Process osilib qolsa, hard timeoutdan keyin majburan to'xtatiladi.
+    """
+
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue()
+
+    process = ctx.Process(
+        target=_chart_worker,
+        args=(ticker, mode, queue),
+        daemon=True,
+    )
+
+    try:
+        print(f"[Chart] Process worker START: {ticker}")
+
+        process.start()
+        process.join(hard_timeout)
+
+        if process.is_alive():
+            print(
+                f"[Chart] HARD TIMEOUT ({hard_timeout}s) "
+                f"— {ticker} process majburan to'xtatilmoqda"
+            )
+
+            process.terminate()
+            process.join(10)
+
+            if process.is_alive():
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+            return None
+
+        if queue.empty():
+            print(f"[Chart] {ticker}: worker natija qaytarmadi")
+            return None
+
+        status, result = queue.get_nowait()
+
+        if status == "ok":
+            print(f"[Chart] Process worker OK: {ticker}")
+            return result
+
+        print(f"[Chart] Worker xato: {ticker}: {result}")
+        return None
+
+    except Exception as e:
+        print(f"[Chart] Process worker exception: {ticker}: {e}")
+
+        try:
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+        except Exception:
+            pass
+
+        return None
+
+    finally:
+        try:
+            queue.close()
+        except Exception:
+            pass
+
+        try:
+            queue.join_thread()
+        except Exception:
+            pass
 
 
 def get_chart_and_info_safe(ticker, hard_timeout=HARD_TIMEOUT):
-    """get_chart_and_info'ni hard-timeout bilan himoyalab chaqiradi."""
-    future = _executor.submit(get_chart_and_info, ticker)
-    try:
-        return future.result(timeout=hard_timeout)
-    except concurrent.futures.TimeoutError:
-        log(f"[Chart] HARD TIMEOUT ({hard_timeout}s) — {ticker} uchun chart olish osilib qoldi")
-        try:
-            if hasattr(browser_manager, "restart"):
-                browser_manager.restart()
-        except Exception as e:
-            log(f"[Chart] Hard timeout restart xato: {e}")
-        return None, None
-    except Exception as e:
-        log(f"[Chart] get_chart_and_info_safe xato: {e}")
-        return None, None
+    """
+    get_chart_and_info() ni xavfsiz alohida processda ishga tushiradi.
+    """
+
+    result = _run_chart_process(
+        ticker,
+        "info",
+        hard_timeout,
+    )
+
+    if result is None:
+        print(
+            f"[Chart] get_chart_and_info_safe: "
+            f"{ticker} uchun grafik olinmadi"
+        )
+
+    return result if result is not None else (None, None)
 
 
 def get_chart_safe(ticker, hard_timeout=HARD_TIMEOUT):
-    """get_chart'ni hard-timeout bilan himoyalab chaqiradi."""
-    future = _executor.submit(get_chart, ticker)
-    try:
-        return future.result(timeout=hard_timeout)
-    except concurrent.futures.TimeoutError:
-        log(f"[Chart] HARD TIMEOUT ({hard_timeout}s) — {ticker} uchun chart olish osilib qoldi")
-        try:
-            if hasattr(browser_manager, "restart"):
-                browser_manager.restart()
-        except Exception as e:
-            log(f"[Chart] Hard timeout restart xato: {e}")
-        return None
-    except Exception as e:
-        log(f"[Chart] get_chart_safe xato: {e}")
-        return None
+    """
+    get_chart() ni xavfsiz alohida processda ishga tushiradi.
+    """
+
+    result = _run_chart_process(
+        ticker,
+        "chart",
+        hard_timeout,
+    )
+
+    if result is None:
+        print(
+            f"[Chart] get_chart_safe: "
+            f"{ticker} uchun grafik olinmadi"
+        )
+
+    return result
