@@ -3,14 +3,12 @@ TOS Alert → Telegram Bot (v5)
 Real-time Finviz screenshot + Yahoo Finance ma'lumotlari
 """
 
-import sys
 import imaplib
 import email
 import time
 from imapclient import IMAPClient
 import re
 import os
-import threading
 import requests
 import yfinance as yf
 import pandas as pd
@@ -21,54 +19,6 @@ from PIL import Image
 from PIL import ImageEnhance
 import io
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-# MUHIM: Render/Docker'da stdout odatda BLOK bo'lib buferlanadi (satr
-# bo'yicha emas), shuning uchun print() qilingan loglar darhol emas,
-# katta to'plamlarda kechikib ko'rinishi mumkin — bu esa "kod osilib
-# qoldi" deb noto'g'ri xulosaga olib kelishi mumkin. Shu sababli stdout
-# va stderr'ni majburan satr-bo'yicha (unbuffered) rejimga o'tkazamiz.
-# multiprocessing "spawn" bilan yaratilgan child processlar ham buni
-# meros qilib oladi (environment orqali).
-os.environ["PYTHONUNBUFFERED"] = "1"
-try:
-    sys.stdout.reconfigure(line_buffering=True)
-    sys.stderr.reconfigure(line_buffering=True)
-except Exception:
-    pass
-
-
-class HealthHandler(BaseHTTPRequestHandler):
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"TOS Telegram Bot is running")
-
-    def log_message(self, format, *args):
-        pass
-
-
-def start_health_server():
-    port = int(os.environ.get("PORT", 10000))
-
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-
-    print(f"[Server] HTTP server port {port} da ishga tushdi")
-
-    server.serve_forever()
-
-
-# DIQQAT: bu yerda threading.Thread(...).start() ATAYLAB yo'q — u faqat
-# quyidagi `if __name__ == "__main__":` bloki ichida ishga tushiriladi.
-# Sabab: services/chart.py multiprocessing("spawn") orqali grafik olish
-# uchun yangi Python jarayoni ochganda, "spawn" usuli butun faylni
-# QAYTADAN import qiladi. Agar shu thread module darajasida (import
-# vaqtida) ishga tushirilsa, har bir yangi grafik-jarayon ham xuddi shu
-# portga ulanishga urinib, "Address already in use" xatosini beradi.
-
-
 load_dotenv()
 
 GMAIL_USER       = os.getenv("GMAIL_USER")
@@ -77,11 +27,6 @@ TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 FINVIZ_EMAIL     = os.getenv("FINVIZ_EMAIL")
 FINVIZ_PASSWORD  = os.getenv("FINVIZ_PASSWORD")
-
-# Render'da bu o'zgaruvchi avtomatik o'rnatiladi (masalan
-# https://tos-telegram-bot.onrender.com) — o'z-o'zini "uyg'oq" ushlab
-# turish (keep-alive) uchun ishlatiladi.
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 TOS_SENDER       = "alerts@thinkorswim.com"
 IDLE_TIMEOUT     = 5 * 60    # 5 daqiqa — tarmoq ulanishini muntazam yangilab turamiz
@@ -105,15 +50,6 @@ def save_sent_id(msg_id: str):
         f.write(msg_id + "\n")
 
 ALREADY_SENT = load_sent_ids()
-
-# ── check_email() uchun qulf (lock) ─────────────────────────────────────────
-# IDLE tsikli check_email()ni bir necha marta ketma-ket (+3s, +8s) chaqiradi,
-# ehtiyot uchun. Lekin agar birinchi chaqiruv hali tugamagan bo'lsa (masalan
-# chart yuklanayotgan bo'lsa), keyingi chaqiruv xuddi shu emailni ALREADY_SENT
-# ga hali qo'shilmagan deb topib, QAYTA yuborishi mumkin edi (race condition).
-# Shu qulf shuni oldini oladi — bir vaqtning o'zida faqat bitta check_email()
-# ishga tushadi, qolganlari jim o'tkazib yuboriladi.
-_check_lock = threading.Lock()
 
 # ── Ticker cooldown ────────────────────────────────────────────────────────
 # TOS ba'zan bir xil ticker uchun scanner qayta ishga tushganda YANGI,
@@ -172,6 +108,92 @@ def get_finviz_via_proxy(ticker: str) -> bytes | None:
 
     return None
 
+# ── Matplotlib bilan candlestick grafik (zaxira) ─────────────────────────────
+def get_matplotlib_chart(ticker: str) -> bytes | None:
+    """Yahoo Finance dan data olib, matplotlib bilan Finviz uslubida grafik yasaydi."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        import io
+
+        stock = yf.Ticker(ticker)
+        hist  = stock.history(period="6mo")
+        if hist.empty or len(hist) < 5:
+            print(f"[Chart] {ticker} data yoq")
+            return None
+
+        fig, (ax1, ax2) = plt.subplots(
+            2, 1, figsize=(12, 7),
+            gridspec_kw={"height_ratios": [3, 1]},
+            facecolor="#0d1117"
+        )
+
+        # Candlestick
+        ax1.set_facecolor("#0d1117")
+        for i, (_, row) in enumerate(hist.iterrows()):
+            bull  = row["Close"] >= row["Open"]
+            color = "#00b386" if bull else "#ff4444"
+            ax1.plot([i, i], [row["Low"], row["High"]], color=color, linewidth=0.9, zorder=1)
+            h = max(abs(row["Close"] - row["Open"]), row["Close"] * 0.001)
+            rect = patches.Rectangle(
+                (i - 0.35, min(row["Open"], row["Close"])),
+                0.7, h, linewidth=0, facecolor=color, zorder=2
+            )
+            ax1.add_patch(rect)
+
+        # Moving averages
+        close = hist["Close"]
+        x = range(len(close))
+        if len(close) >= 20:
+            ax1.plot(x, close.rolling(20).mean(), color="#f0a500", linewidth=1.2, label="SMA 20")
+        if len(close) >= 50:
+            ax1.plot(x, close.rolling(50).mean(), color="#7b68ee", linewidth=1.2, label="SMA 50")
+        if len(close) >= 200:
+            ax1.plot(x, close.rolling(200).mean(), color="#ff7f50", linewidth=1.2, label="SMA 200")
+
+        # X labels
+        step = max(1, len(hist) // 8)
+        ax1.set_xticks(range(0, len(hist), step))
+        ax1.set_xticklabels(
+            [hist.index[i].strftime("%b %d") for i in range(0, len(hist), step)],
+            color="#8b949e", fontsize=8, rotation=0
+        )
+        ax1.tick_params(axis="y", colors="#8b949e", labelsize=9)
+        ax1.set_xlim(-1, len(hist))
+        ax1.set_title(f"{ticker}  ·  Daily  ·  6mo", color="#e6edf3", fontsize=13, pad=8, loc="left")
+        ax1.legend(facecolor="#161b22", labelcolor="#e6edf3", fontsize=8, loc="upper left")
+        for sp in ax1.spines.values():
+            sp.set_color("#30363d")
+        ax1.yaxis.grid(True, color="#21262d", linewidth=0.6)
+        ax1.set_axisbelow(True)
+
+        # Volume
+        ax2.set_facecolor("#0d1117")
+        vol_colors = ["#00b386" if c >= o else "#ff4444"
+                      for c, o in zip(hist["Close"], hist["Open"])]
+        ax2.bar(range(len(hist)), hist["Volume"] / 1_000_000, color=vol_colors, alpha=0.85)
+        ax2.set_ylabel("Vol M", color="#8b949e", fontsize=8)
+        ax2.tick_params(colors="#8b949e", labelsize=7)
+        ax2.set_xlim(-1, len(hist))
+        for sp in ax2.spines.values():
+            sp.set_color("#30363d")
+        ax2.yaxis.grid(True, color="#21262d", linewidth=0.5)
+        ax2.set_axisbelow(True)
+
+        plt.tight_layout(pad=1.2)
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor="#0d1117")
+        buf.seek(0)
+        img = buf.read()
+        plt.close()
+        print(f"[Chart] {ticker} grafigi yaratildi ({len(img)//1024}KB)")
+        return img
+    except Exception as e:
+        print(f"[Chart xato] {ticker}: {e}")
+        return None
+
 # ── Texnik indikatorlar ───────────────────────────────────────────────────────
 def calc_rsi(closes: pd.Series, period: int = 14) -> float:
     try:
@@ -200,129 +222,52 @@ def calc_macd(closes: pd.Series) -> str:
         return "N/A"
 
 # ── Yahoo Finance ─────────────────────────────────────────────────────────────
-YAHOO_CACHE = {}
-YAHOO_CACHE_TTL = 300  # 5 daqiqa
-
-# Company/Sector/Market Cap uchun stock.info chaqiruvi Yahoo'ning eng tez
-# rate-limit qiladigan endpointi (quoteSummary). Render'ning umumiy IP'ida
-# bu tez-tez "Too Many Requests" beradi va HAR safar chaqirilgani uchun
-# asl narx/tarix so'rovini ham bloklanish xavfiga qo'yadi. Standart holatda
-# o'chirilgan — kerak bo'lsa FETCH_COMPANY_INFO=true bilan yoqiladi.
-FETCH_COMPANY_INFO = os.getenv("FETCH_COMPANY_INFO", "false").lower() == "true"
-
-def format_number(n) -> str:
-    n = float(n or 0)
-
-    if n >= 1_000_000_000:
-        return f"{n/1_000_000_000:.2f}B"
-
-    if n >= 1_000_000:
-        return f"{n/1_000_000:.2f}M"
-
-    if n >= 1_000:
-        return f"{n/1_000:.2f}K"
-
-    return str(round(n, 2))
-
-
-def _fetch_history_with_retry(stock, retries: int = 2, delay: float = 3.0):
-    """
-    Yahoo Finance vaqti-vaqti bilan (ayniqsa umumiy/paylashilgan IP'larda,
-    masalan Render) "Too Many Requests" qaytaradi. Bir necha marta qisqa
-    kutish bilan qayta urinamiz.
-    """
-    last_err = None
-    for attempt in range(retries + 1):
-        try:
-            hist = stock.history(period="1y", interval="1d", auto_adjust=False)
-            if not hist.empty:
-                return hist
-            last_err = "bo'sh natija"
-        except Exception as e:
-            last_err = e
-        if attempt < retries:
-            time.sleep(delay)
-    print(f"[Yahoo xato] history: {last_err}")
-    return None
-
-
 def get_stock_info(ticker: str) -> dict:
-
-    ticker = ticker.upper().strip()
-
-    now = time.time()
-    cached = YAHOO_CACHE.get(ticker)
-    if cached:
-        cached_time, cached_data = cached
-        if now - cached_time < YAHOO_CACHE_TTL:
-            print(f"[Yahoo] {ticker}: cache ishlatildi")
-            return cached_data
-
     try:
-        print(f"[Yahoo] {ticker}: ma'lumot olinmoqda...")
-
         stock = yf.Ticker(ticker)
-        hist = _fetch_history_with_retry(stock)
+        info  = stock.info
 
-        if hist is None or hist.empty:
-            print(f"[Yahoo xato] {ticker}: history bo'sh")
-            return {}
+        price = float(
+            info.get("currentPrice") or
+            info.get("regularMarketPrice") or
+            info.get("navPrice") or 0.0
+        )
+        prev_close = float(info.get("previousClose") or info.get("regularMarketPreviousClose") or 0.0)
+        change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
+        volume     = int(info.get("volume") or info.get("regularMarketVolume") or 0)
+        avg_vol    = int(info.get("averageVolume") or 0)
+        rvol       = round(volume / avg_vol, 2) if avg_vol else 0.0
+        market_cap = info.get("marketCap") or 0
+        sector     = info.get("sector") or "N/A"
+        company    = info.get("longName") or info.get("shortName") or ticker
 
-        closes = hist["Close"].dropna()
-        if closes.empty:
-            print(f"[Yahoo xato] {ticker}: Close ma'lumoti yo'q")
-            return {}
+        hist = stock.history(period="1y")
+        if not hist.empty:
+            closes     = hist["Close"].dropna()
+            rsi        = calc_rsi(closes)
+            macd_trend = calc_macd(closes)
+            support    = round(float(hist["Low"].min()), 2)
+            resistance = round(float(hist["High"].max()), 2)
+        else:
+            rsi, macd_trend, support, resistance = 0.0, "N/A", 0.0, 0.0
 
-        price = float(closes.iloc[-1])
-        prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else price
-        change_pct = ((price - prev_close) / prev_close) * 100 if prev_close else 0.0
-
-        volume = int(hist["Volume"].iloc[-1]) if "Volume" in hist.columns else 0
-        avg_vol = int(hist["Volume"].tail(20).mean()) if "Volume" in hist.columns else 0
-        rvol = round(volume / avg_vol, 2) if avg_vol else 0.0
-
-        rsi = calc_rsi(closes)
-        macd_trend = calc_macd(closes)
-
-        support = round(float(hist["Low"].min()), 2)
-        resistance = round(float(hist["High"].max()), 2)
-
-        company = ticker
-        sector = "N/A"
-        market_cap = 0
-
-        if FETCH_COMPANY_INFO:
-            try:
-                info = stock.info
-                company = info.get("longName") or info.get("shortName") or ticker
-                sector = info.get("sector") or "N/A"
-                market_cap = info.get("marketCap") or 0
-            except Exception as e:
-                print(f"[Yahoo] {ticker}: info olinmadi: {e}")
-
-        result = {
-            "price": price,
-            "prev_close": prev_close,
-            "change_pct": change_pct,
-            "volume": volume,
-            "avg_vol": avg_vol,
-            "rvol": rvol,
-            "market_cap": market_cap,
-            "sector": sector,
-            "company": company,
-            "rsi": rsi,
-            "macd_trend": macd_trend,
-            "support": support,
-            "resistance": resistance,
+        return {
+            "company": company, "sector": sector,
+            "price": price, "change_pct": change_pct,
+            "volume": volume, "avg_volume": avg_vol, "rvol": rvol,
+            "market_cap": market_cap, "rsi": rsi,
+            "macd_trend": macd_trend, "support": support, "resistance": resistance,
         }
-
-        YAHOO_CACHE[ticker] = (now, result)
-        print(f"[Yahoo] {ticker}: muvaffaqiyatli olindi ✅")
-        return result
-
     except Exception as e:
         print(f"[Yahoo xato] {ticker}: {e}")
         return {}
+
+def format_number(n) -> str:
+    n = float(n or 0)
+    if n >= 1_000_000_000: return f"{n/1_000_000_000:.2f}B"
+    if n >= 1_000_000:     return f"{n/1_000_000:.2f}M"
+    if n >= 1_000:         return f"{n/1_000:.2f}K"
+    return str(round(n, 2))
 
 # ── Signal filtri ─────────────────────────────────────────────────────────────
 def is_strong_signal(d: dict) -> tuple:
@@ -351,7 +296,7 @@ def build_message(ticker: str, scanner_name: str) -> tuple:
         f"🏢 <b>Company:</b> {d['company']}\n"
         f"🏭 <b>Sector:</b> {d['sector']}\n"
         f"📊 <b>% Change:</b> {arrow} {d['change_pct']:+.2f}%\n"
-        f"📉 <b>Yesterday Vol:</b> {format_number(d['avg_vol'])}\n"
+        f"📉 <b>Yesterday Vol:</b> {format_number(d['avg_volume'])}\n"
         f"📈 <b>Current Vol:</b> {format_number(d['volume'])}\n"
         f"⚡ <b>RVol:</b> {d['rvol']}\n"
         f"📊 <b>Market Cap:</b> {format_number(d['market_cap'])}\n"
@@ -363,6 +308,11 @@ def build_message(ticker: str, scanner_name: str) -> tuple:
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 def get_chart_image(ticker: str) -> bytes | None:
+    """
+    Faqat Finviz'dan olingan haqiqiy grafikni qaytaradi.
+    Agar Finviz'dan grafik olib bo'lmasa, None qaytaradi —
+    bu holda ticker butunlay tashlab o'tiladi (matplotlib fallback yo'q).
+    """
     img = get_chart_safe(ticker)
 
     if not img:
@@ -371,14 +321,24 @@ def get_chart_image(ticker: str) -> bytes | None:
 
     try:
         image = Image.open(io.BytesIO(img))
-        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
+
+        # 2x kattalashtirish
+        image = image.resize(
+        (image.width * 2, image.height * 2),
+        Image.LANCZOS,
+        )
+
+        # Sharpness
         image = ImageEnhance.Sharpness(image).enhance(1.4)
+
+        # Contrast
         image = ImageEnhance.Contrast(image).enhance(1.05)
 
         output = io.BytesIO()
         image.save(output, format="PNG", optimize=True)
 
         print(f"[Chart] Finviz HD OK: {ticker}")
+
         return output.getvalue()
 
     except Exception as e:
@@ -386,6 +346,10 @@ def get_chart_image(ticker: str) -> bytes | None:
         return img
 
 def send_telegram_photo(caption: str, ticker: str) -> bool:
+    """
+    Faqat grafik bilan birga yuboradi. Agar Finviz'dan grafik olinmasa,
+    hech narsa yubormaydi (matn fallback yo'q) va False qaytaradi.
+    """
     img_bytes = get_chart_image(ticker)
 
     if not img_bytes:
@@ -439,20 +403,6 @@ def extract_tickers_and_scanner(subject: str, body: str):
 
 # ── Email tekshirish ──────────────────────────────────────────────────────────
 def check_email():
-    """
-    Bir vaqtning o'zida faqat bitta nusxasi ishlashini kafolatlaydi
-    (qarang: _check_lock izohi yuqorida).
-    """
-    if not _check_lock.acquire(blocking=False):
-        print("[Email] Oldingi tekshiruv hali tugamagan, bu chaqiruv o'tkazib yuborildi")
-        return
-    try:
-        _check_email_impl()
-    finally:
-        _check_lock.release()
-
-
-def _check_email_impl():
     mail = None
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -460,6 +410,14 @@ def _check_email_impl():
         mail.select("inbox")
 
         since = datetime.now().strftime("%d-%b-%Y")
+        # DIQQAT: UNSEEN olib tashlandi — boshqa dastur (masalan Gmail Bot)
+        # emailni "o'qilgan" deb belgilab qo'yishi mumkin, shunda UNSEEN
+        # qidiruv uni topolmay qoladi. Endi dublikatlarni faqat o'zimizning
+        # ALREADY_SENT (sent_ids.txt) orqali nazorat qilamiz.
+        #
+        # DIQQAT 2: oddiy sequence number (mail.search) har xil ulanishda
+        # o'zgarib turadi — shuning uchun IMAP UID (mail.uid) ishlatamiz,
+        # u barqaror va bir xil email uchun doim bir xil qoladi.
         _, data = mail.uid("search", None, f'(FROM "{TOS_SENDER}" SINCE "{since}")')
         ids = data[0].split()
         print(f"[Email] {len(ids)} ta email topildi (jami, SEEN/UNSEEN farqisiz)")
@@ -471,19 +429,12 @@ def _check_email_impl():
                 continue
             msg     = email.message_from_bytes(msg_data[0][1])
             subject = msg.get("Subject", "")
+            # Message-ID bo'lmasa, barqaror IMAP UID'dan foydalanamiz
+            # (sequence number'dan farqli o'laroq, UID o'zgarmaydi)
             msg_id  = msg.get("Message-ID", f"uid-{uid_str}")
 
             if msg_id in ALREADY_SENT:
                 continue
-
-            # MUHIM: emailni ALREADY_SENT'ga DARHOL (ticker'larni qayta
-            # ishlashdan OLDIN) qo'shamiz. Aks holda, agar shu email uchun
-            # chart yuklash/Telegram'ga yuborish uzoq davom etsa va shu
-            # vaqt ichida yana bir check_email() chaqirilsa (garchi lock
-            # asosiy race condition'ni oldini olsa ham, ehtiyot chorasi
-            # sifatida), email qayta ko'rinmaydi.
-            ALREADY_SENT.add(msg_id)
-            save_sent_id(msg_id)
 
             body = ""
             if msg.is_multipart():
@@ -496,14 +447,19 @@ def _check_email_impl():
 
             print(f"[Email] Subject: {subject}")
 
+            # "New symbol: X was added to Y" yoki "Following list of Y: X" formatlarini qabul qilamiz
             is_new_symbol = re.search(r"New symbols?\s*:", subject, re.IGNORECASE)
             is_following  = re.search(r"Following list", subject, re.IGNORECASE)
 
             if not is_new_symbol and not is_following:
                 print("[Skip] Noma'lum email formati")
+                ALREADY_SENT.add(msg_id)
+                save_sent_id(msg_id)
                 continue
 
+            # "Following list of SCANNER: TICKER1, TICKER2" formatidan ticker olish
             if is_following and not is_new_symbol:
+                # Subject: "Alert: Following list of trend + breakout + volume oldin: MGNI."
                 m_follow = re.search(r"Following list of (?:symbols? )?(?:were )?added to (.+?)\s+oldin\s*:\s*([A-Z, .]+)", subject, re.IGNORECASE)
                 if m_follow:
                     scanner_name = m_follow.group(1).strip().rstrip()
@@ -523,6 +479,8 @@ def _check_email_impl():
                             _mark_ticker_sent(ticker, scanner_name)
                             print(f"[Telegram] {ticker} yuborildi ✅")
                         time.sleep(2)
+                    ALREADY_SENT.add(msg_id)
+                    save_sent_id(msg_id)
                 else:
                     print(f"[Skip] Following list formati tanilmadi: {subject}")
                 continue
@@ -543,6 +501,9 @@ def _check_email_impl():
                     print(f"[Telegram] {ticker} yuborildi ✅")
                 time.sleep(2)
 
+            ALREADY_SENT.add(msg_id)
+            save_sent_id(msg_id)
+
     except Exception as e:
         print(f"[Xato] {e}")
     finally:
@@ -552,23 +513,12 @@ def _check_email_impl():
         except Exception:
             pass
 
-# ── Render uchun keep-alive (bepul tarif uzoq harakatsizlikdan keyin
-#    o'zini o'chirib qo'yadi, shuning uchun o'z-o'ziga davriy so'rov
-#    yuborib "uyg'oq" ushlab turamiz) ─────────────────────────────────────
-def keep_alive_loop():
-    if not RENDER_EXTERNAL_URL:
-        return
-    while True:
-        time.sleep(600)  # 10 daqiqada bir
-        try:
-            requests.get(RENDER_EXTERNAL_URL, timeout=15)
-            print("[Keep-alive] Ping yuborildi")
-        except Exception as e:
-            print(f"[Keep-alive xato] {e}")
-
-
 # ── IMAP IDLE tsikli ──────────────────────────────────────────────────────────
 def imap_idle_loop():
+    """
+    Gmail'ga IMAP IDLE orqali ulanadi va yangi email kelishi bilan
+    DARHOL check_email() ni chaqiradi — polling shart emas, resurs tejaladi.
+    """
     while True:
         client = None
         try:
@@ -577,6 +527,8 @@ def imap_idle_loop():
             client.select_folder("INBOX")
             print("📡 IMAP IDLE rejimida kutilmoqda (email kelishi bilan darhol javob beradi)...")
 
+            # Ulanish uzilib qayta tiklanganda, o'sha vaqt ichida kelgan
+            # emaillarni o'tkazib yubormaslik uchun DARHOL bir marta tekshiramiz
             check_email()
             last_poll = time.time()
 
@@ -589,12 +541,17 @@ def imap_idle_loop():
 
                 if responses:
                     print(f"[IDLE] Yangi faoliyat aniqlandi -> tekshirilmoqda")
+                    # Gmail'ning IMAP SEARCH indeksi bir necha soniya kechikishi
+                    # mumkin, shuning uchun darhol emas, ozgina kutib tekshiramiz
                     time.sleep(3)
                     check_email()
+                    # Ehtiyot uchun 5s dan keyin yana bir bor tekshiramiz —
+                    # agar birinchi safar hali indekslanmagan bo'lsa ham tutib olamiz
                     time.sleep(5)
                     check_email()
                     last_poll = time.time()
 
+                # Ehtiyot uchun davriy tekshiruv (IDLE signal yo'qolib qolsa)
                 if time.time() - last_poll > FALLBACK_POLL:
                     print("[IDLE] Ehtiyot uchun davriy tekshiruv")
                     check_email()
@@ -612,20 +569,14 @@ def imap_idle_loop():
 
 # ── Asosiy tsikl ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    threading.Thread(target=start_health_server, daemon=True).start()
-
-    print("🚀 TOS → Telegram bot v6 (IMAP IDLE, Render) ishga tushdi!")
+    print("🚀 TOS → Telegram bot v6 (IMAP IDLE) ishga tushdi!")
     print(f"   Gmail: {GMAIL_USER}")
     print(f"   Kanal: {TELEGRAM_CHAT_ID}")
     print(f"   Rejim: IMAP IDLE (real-time, polling yo'q)")
     print(f"   Ehtiyot tekshiruvi: har {FALLBACK_POLL // 60} daqiqada")
-    print(f"   Filter: RVol>={MIN_RVOL}, RSI {RSI_MIN}-{RSI_MAX}")
-    company_info_status = "yoqilgan" if FETCH_COMPANY_INFO else "o'chirilgan (Yahoo rate-limit kamaytirish uchun)"
-    print(f"   Company info so'rovi: {company_info_status}\n")
+    print(f"   Filter: RVol>={MIN_RVOL}, RSI {RSI_MIN}-{RSI_MAX}\n")
 
-    if RENDER_EXTERNAL_URL:
-        threading.Thread(target=keep_alive_loop, daemon=True).start()
-        print(f"   Keep-alive: {RENDER_EXTERNAL_URL} ga har 10 daqiqada ping\n")
-
+    # Ishga tushganda darhol bir marta tekshirib qo'yamiz
     check_email()
+
     imap_idle_loop()
