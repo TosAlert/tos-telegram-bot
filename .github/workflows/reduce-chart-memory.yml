@@ -27,12 +27,17 @@ jobs:
           end = text.index('\ndef send_telegram_photo', start)
 
           new_func = '''def get_chart_image(ticker: str) -> bytes | None:
-    # RAM-saving path: direct Finviz PNG first. This avoids Chromium for
-    # normal chart alerts and is the primary path on Render Free (512 MB).
+    # RAM-saving path: direct Finviz PNG first. No Chromium for normal alerts.
+    # Render Free has only 512 MB, so browser capture is a last-resort fallback.
     print(f"[Chart] Direct Finviz PNG: {ticker}", flush=True)
-    img = get_finviz_via_proxy(ticker)
 
-    # Only if direct PNG fails do we use the old Playwright/Chromium fallback.
+    img = None
+    try:
+        from services.finviz_api import get_chart as get_finviz_chart
+        img = get_finviz_chart(ticker)
+    except Exception as e:
+        print(f"[Chart] Direct Finviz API xato: {e}", flush=True)
+
     if not img:
         print(f"[Chart] Direct PNG failed -> Playwright fallback: {ticker}", flush=True)
         img = get_chart_safe(ticker)
@@ -42,17 +47,19 @@ jobs:
         return None
 
     try:
-        image = Image.open(io.BytesIO(img))
-        target_w = min(image.width * 2, 1600)
+        image = Image.open(io.BytesIO(img)).convert("RGB")
+        target_w = min(max(image.width, 1000), 1600)
         target_h = max(1, round(image.height * (target_w / image.width)))
-        image = image.resize((target_w, target_h), Image.LANCZOS)
-        image = ImageEnhance.Sharpness(image).enhance(1.4)
-        image = ImageEnhance.Contrast(image).enhance(1.05)
+        if image.width != target_w:
+            image = image.resize((target_w, target_h), Image.LANCZOS)
+
+        image = ImageEnhance.Sharpness(image).enhance(1.25)
+        image = ImageEnhance.Contrast(image).enhance(1.03)
 
         output = io.BytesIO()
-        image.save(output, format="PNG", optimize=True)
+        image.save(output, format="JPEG", quality=94, optimize=True, progressive=True)
         result = output.getvalue()
-        print(f"[Chart] Finviz HD OK: {ticker} ({target_w}x{target_h}, {len(result)//1024} KB)", flush=True)
+        print(f"[Chart] Finviz HD OK: {ticker} ({image.width}x{image.height}, {len(result)//1024} KB)", flush=True)
         return result
     except Exception as e:
         print(f"[Chart] Pillow error: {e}", flush=True)
@@ -69,5 +76,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add tos_telegram_bot.py
           git diff --cached --quiet && exit 0
-          git commit -m "Use direct Finviz chart before Chromium"
+          git commit -m "Use direct Finviz PNG before Chromium fallback"
           git push
