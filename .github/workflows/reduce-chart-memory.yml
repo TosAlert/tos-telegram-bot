@@ -1,0 +1,73 @@
+name: Reduce chart memory
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch Telegram chart capture
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('tos_telegram_bot.py')
+          text = p.read_text(encoding='utf-8')
+
+          start = text.index('def get_chart_image(ticker: str) -> bytes | None:')
+          end = text.index('\ndef send_telegram_photo', start)
+
+          new_func = '''def get_chart_image(ticker: str) -> bytes | None:
+    # RAM-saving path: direct Finviz PNG first. This avoids Chromium for
+    # normal chart alerts and is the primary path on Render Free (512 MB).
+    print(f"[Chart] Direct Finviz PNG: {ticker}", flush=True)
+    img = get_finviz_via_proxy(ticker)
+
+    # Only if direct PNG fails do we use the old Playwright/Chromium fallback.
+    if not img:
+        print(f"[Chart] Direct PNG failed -> Playwright fallback: {ticker}", flush=True)
+        img = get_chart_safe(ticker)
+
+    if not img:
+        print(f"[Chart] {ticker} uchun Finviz grafigi olinmadi — o'tkazib yuborildi", flush=True)
+        return None
+
+    try:
+        image = Image.open(io.BytesIO(img))
+        target_w = min(image.width * 2, 1600)
+        target_h = max(1, round(image.height * (target_w / image.width)))
+        image = image.resize((target_w, target_h), Image.LANCZOS)
+        image = ImageEnhance.Sharpness(image).enhance(1.4)
+        image = ImageEnhance.Contrast(image).enhance(1.05)
+
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        result = output.getvalue()
+        print(f"[Chart] Finviz HD OK: {ticker} ({target_w}x{target_h}, {len(result)//1024} KB)", flush=True)
+        return result
+    except Exception as e:
+        print(f"[Chart] Pillow error: {e}", flush=True)
+        return img
+'''
+
+          text = text[:start] + new_func + text[end:]
+          p.write_text(text, encoding='utf-8')
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tos_telegram_bot.py
+          git diff --cached --quiet && exit 0
+          git commit -m "Use direct Finviz chart before Chromium"
+          git push
