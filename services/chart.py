@@ -696,6 +696,12 @@ def get_chart(ticker):
 
 import multiprocessing as mp
 
+try:
+    import psutil
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
+
 HARD_TIMEOUT = 90
 INNER_ALARM_TIMEOUT = 75  # tashqi 90s dan kamroq — ichki alarm birinchi ishga tushsin
 
@@ -706,6 +712,55 @@ class _InnerHardTimeout(Exception):
 
 def _alarm_handler(signum, frame):
     raise _InnerHardTimeout("Ichki signal.alarm timeout")
+
+
+def _kill_process_tree(pid, timeout=5):
+    """
+    MUHIM: process.terminate() faqat worker Python jarayonini o'chiradi,
+    lekin uning ICHIDA Playwright ochgan Chromium — alohida "bola" jarayon.
+    Faqat worker'ni o'chirish Chromium'ni "etim" (orphan) holatda qoldirib,
+    xotirada ishlab qolaveradi. Bir necha marta takrorlangan hang'lardan
+    keyin bu ko'plab Chromium nusxalarini to'plab, Render konteynerini
+    OOM (xotira yetishmasligi) sababli butunlay qayta ishga tushirishga
+    majbur qiladi — aynan kuzatilgan holat. Shuning uchun butun jarayon
+    daraxtini (Chromium bilan birga) o'chiramiz.
+    """
+    if not _HAS_PSUTIL:
+        # psutil yo'q bo'lsa, hech bo'lmasa asosiy jarayonni o'chiramiz
+        try:
+            os_kill_fallback = __import__("os").kill
+            os_kill_fallback(pid, 15)
+        except Exception:
+            pass
+        return
+
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+
+    children = parent.children(recursive=True)
+    for child in children:
+        try:
+            child.terminate()
+        except Exception:
+            pass
+
+    _, alive = psutil.wait_procs(children, timeout=timeout)
+    for p in alive:
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+    try:
+        parent.terminate()
+        parent.wait(timeout)
+    except Exception:
+        try:
+            parent.kill()
+        except Exception:
+            pass
 
 
 def _chart_worker(ticker, mode, queue):
@@ -750,29 +805,40 @@ def _chart_worker(ticker, mode, queue):
 
 
 def _run_chart_process(ticker, mode, hard_timeout):
+    """
+    MUHIM: navbat (Queue) katta ma'lumot (masalan rasm bytes) bilan
+    to'ldirilganda, bola jarayon uni fon oqimi orqali OS pipe'iga yozadi.
+    Agar asosiy jarayon avval faqat process.join()ni kutib, navbatni hali
+    o'qimagan bo'lsa, pipe to'lib qolishi mumkin — bola jarayon chiqib
+    keta olmay "osilib qolganday" ko'rinadi, garchi u ishini ALLAQACHON
+    tugatgan bo'lsa ham! Shuning uchun avval navbatdan o'qiymiz (bu bola
+    jarayonni pipe orqali "bo'shatadi"), keyingina join() bilan jarayonni
+    yig'ishtiramiz.
+    """
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
     process = ctx.Process(target=_chart_worker, args=(ticker, mode, queue))
     process.start()
-    process.join(hard_timeout)
+
+    data = None
+    try:
+        data = queue.get(timeout=hard_timeout)
+    except Exception:
+        data = None  # vaqt tugadi yoki navbat bo'sh — hech narsa kelmadi
+
+    # Natija kelgan-kelmaganidan qat'iy nazar, jarayonni tugatish uchun
+    # qisqa vaqt beramiz (natija kelgan bo'lsa, bu deyarli darhol tugaydi)
+    process.join(5)
 
     if process.is_alive():
         print(f"[Chart] TASHQI HARD TIMEOUT ({hard_timeout}s) -> {ticker}", flush=True)
-        try:
-            process.terminate()
-            process.join(5)
-            if process.is_alive():
-                process.kill()
-                process.join(3)
-        except Exception:
-            pass
+        _kill_process_tree(process.pid)
         return None
 
-    if queue.empty():
+    if data is None:
         print(f"[Chart] Worker natija qaytarmadi: {ticker}", flush=True)
         return None
 
-    data = queue.get()
     if not data.get("ok"):
         print(f"[Chart] Worker error: {data.get('error')}", flush=True)
         return None
