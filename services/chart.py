@@ -1,5 +1,4 @@
 import re
-import signal
 import time
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -83,23 +82,10 @@ class ChartDownloader:
         browser_manager.start()
 
     def _block_ads(self, page):
-        def _route_handler(route):
-            req = route.request
-            try:
-                if any(b in req.url for b in BLOCKED_DOMAINS) or req.resource_type == "media":
-                    route.abort()
-                else:
-                    route.continue_()
-            except Exception:
-                try:
-                    route.continue_()
-                except Exception:
-                    pass
-
-        try:
-            page.route("**/*", _route_handler)
-        except Exception as e:
-            log(f"[Chart] Route bloklashda xato: {e}")
+        """Network interception is disabled to avoid Playwright route callback
+        corruption when a timeout kills a worker. The external process watchdog
+        handles hangs and kills the full Chromium process tree."""
+        return None
 
     def _safe_click(self, page, locator, label):
         try:
@@ -685,10 +671,9 @@ def get_chart(ticker):
 # Ikki qatlamli himoya:
 #   1) TASHQI: alohida process (multiprocessing) + process.join(hard_timeout)
 #      — agar worker javob bermasa, majburan terminate qilinadi.
-#   2) ICHKI: worker process ichida signal.alarm(...) — agar biror
-#      Playwright chaqiruvi o'zining timeout'ini ham hurmat qilmay abadiy
-#      osilib qolsa (kuzatilgan holat), worker ICHIDAN o'zi vaqtida
-#      TimeoutError chiqarib to'xtaydi, tashqi watchdog kutmasdan.
+#   2) Playwright chaqiruvlarining o'z timeoutlari ishlaydi.
+#      Tashqi watchdog javob bo'lmasa butun worker + Chromium daraxtini
+#      tugatadi.
 #
 # MUHIM: bot faylida to'g'ridan-to'g'ri get_chart_and_info(...) /
 # get_chart(...) o'rniga quyidagi get_chart_and_info_safe(...) /
@@ -703,16 +688,6 @@ except ImportError:
     _HAS_PSUTIL = False
 
 HARD_TIMEOUT = 90
-INNER_ALARM_TIMEOUT = 75  # tashqi 90s dan kamroq — ichki alarm birinchi ishga tushsin
-
-
-class _InnerHardTimeout(Exception):
-    pass
-
-
-def _alarm_handler(signum, frame):
-    raise _InnerHardTimeout("Ichki signal.alarm timeout")
-
 
 def _kill_process_tree(pid, timeout=5):
     """
@@ -764,45 +739,24 @@ def _kill_process_tree(pid, timeout=5):
 
 
 def _chart_worker(ticker, mode, queue):
-    """
-    Playwright Sync API alohida process ichida ishlaydi (asyncio bilan
-    to'qnashmasligi uchun). Ichida qo'shimcha signal.alarm bilan
-    himoyalangan — Playwright'ning o'zi hech qachon abadiy osilib
-    qolmasligini kafolatlaydi.
-    """
-    try:
-        signal.signal(signal.SIGALRM, _alarm_handler)
-        signal.alarm(INNER_ALARM_TIMEOUT)
-    except Exception as e:
-        # signal faqat asosiy thread'da va Unix'da ishlaydi — Render/Linux
-        # uchun bu muammo bo'lmasligi kerak, lekin ehtiyot uchun try/except
-        print(f"[Chart Worker] signal.alarm sozlanmadi: {e}", flush=True)
+    """Run Playwright Sync API in an isolated process.
 
+    Do not use signal.alarm here. Interrupting Playwright while it is
+    dispatching a route callback can produce RouteHandler.handle warnings,
+    broken driver connections and EPIPE errors. The parent process provides
+    the hard timeout and kills the complete Chromium process tree.
+    """
     try:
         print(f"[Chart Worker] START: {ticker} | mode={mode}", flush=True)
-
-        if mode == "info":
-            result = get_chart_and_info(ticker)
-        else:
-            result = get_chart(ticker)
-
+        result = get_chart_and_info(ticker) if mode == "info" else get_chart(ticker)
         queue.put({"ok": True, "result": result})
         print(f"[Chart Worker] DONE: {ticker}", flush=True)
-
-    except _InnerHardTimeout:
-        print(f"[Chart Worker] ICHKI HARD TIMEOUT ({INNER_ALARM_TIMEOUT}s): {ticker}", flush=True)
-        queue.put({"ok": False, "error": "inner_hard_timeout"})
-
     except Exception as e:
         print(f"[Chart Worker] ERROR: {ticker}: {e}", flush=True)
-        queue.put({"ok": False, "error": str(e)})
-
-    finally:
         try:
-            signal.alarm(0)
+            queue.put({"ok": False, "error": str(e)})
         except Exception:
             pass
-
 
 def _run_chart_process(ticker, mode, hard_timeout):
     """
