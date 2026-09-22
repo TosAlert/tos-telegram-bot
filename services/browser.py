@@ -26,10 +26,14 @@ class BrowserManager:
             return
 
         self.playwright = sync_playwright().start()
-        railway = os.getenv("RAILWAY_ENVIRONMENT") is not None
+        cloud = (
+            os.getenv("RAILWAY_ENVIRONMENT") is not None
+            or os.getenv("RENDER") is not None
+            or os.getenv("RENDER_SERVICE_ID") is not None
+        )
 
-        if railway:
-            print("[Browser] Railway mode")
+        if cloud:
+            print("[Browser] Cloud/Linux mode")
             self.browser = self.playwright.chromium.launch(
                 headless=True,
                 chromium_sandbox=False,
