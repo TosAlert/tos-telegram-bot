@@ -82,10 +82,36 @@ class ChartDownloader:
         browser_manager.start()
 
     def _block_ads(self, page):
-        """Network interception is disabled to avoid Playwright route callback
-        corruption when a timeout kills a worker. The external process watchdog
-        handles hangs and kills the full Chromium process tree."""
-        return None
+        """Finviz chart uchun og'ir reklama/analytics resurslarini bloklaydi.
+        Callback sync bo'lishi shart: chart worker ham Playwright Sync API ishlatadi.
+        """
+        def handle_route(route):
+            try:
+                req = route.request
+                url = (req.url or "").lower()
+                resource_type = req.resource_type
+
+                if any(domain in url for domain in BLOCKED_DOMAINS):
+                    route.abort()
+                    return
+
+                # 512 MB Render uchun chartga kerak bo'lmagan og'ir resurslar.
+                if resource_type in {"font", "media"}:
+                    route.abort()
+                    return
+
+                route.continue_()
+            except Exception:
+                try:
+                    route.continue_()
+                except Exception:
+                    pass
+
+        try:
+            page.route("**/*", handle_route)
+            log("[Chart] Reklama/analytics route filter yoqildi")
+        except Exception as e:
+            log(f"[Chart] Route filter yoqilmadi: {e}")
 
     def _safe_click(self, page, locator, label):
         try:
@@ -144,21 +170,22 @@ class ChartDownloader:
         except Exception as e:
             log(f"[Chart] Cookie sozlashda xato: {e}")
 
+        # "load/networkidle"ni kutmaymiz: Finviz reklama/analytics sabab
+        # uzoq vaqt networkni band qilib turishi mumkin. Chart uchun document
+        # commit bo'lishining o'zi yetarli; keyin canvasni alohida kutamiz.
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.goto(url, wait_until="commit", timeout=15000)
         except TimeoutError:
-            log("[Chart] First timeout -> retry")
-            page.goto(url, wait_until="commit", timeout=30000)
+            log("[Chart] Navigation 15s timeout -> sahifa qisman yuklangan bo'lsa davom etamiz")
 
-        page.set_viewport_size({"width": 1100, "height": 850})
-        page.wait_for_timeout(1500)
+        page.set_viewport_size({"width": 1600, "height": 1200})
 
         try:
-            page.wait_for_load_state("networkidle", timeout=5000)
+            page.wait_for_load_state("domcontentloaded", timeout=8000)
         except Exception:
             pass
 
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(700)
 
         try:
             page.evaluate("""
@@ -191,8 +218,30 @@ class ChartDownloader:
         except Exception:
             pass
 
-        page.locator("canvas").first.wait_for(state="visible", timeout=15000)
-        page.wait_for_timeout(1200)
+        # Avval chart canvasini kutamiz. Oddiy "first canvas" reklama canvasiga
+        # tushib qolishi mumkin, shuning uchun chart containerlarni ham tekshiramiz.
+        chart_ready = False
+        for sel in [
+            "#chart-container canvas",
+            "div[id^='chart'] canvas",
+            "div[class*='chart'] canvas",
+            "canvas",
+        ]:
+            try:
+                loc = page.locator(sel).first
+                loc.wait_for(state="visible", timeout=12000)
+                box = loc.bounding_box()
+                if box and box["width"] >= 400 and box["height"] >= 200:
+                    chart_ready = True
+                    log(f"[Chart] Chart canvas tayyor: {sel} ({int(box['width'])}x{int(box['height'])})")
+                    break
+            except Exception:
+                continue
+
+        if not chart_ready:
+            raise TimeoutError("Finviz chart canvas 12 soniyada tayyor bo'lmadi")
+
+        page.wait_for_timeout(500)
 
         try:
             page.evaluate("""
@@ -363,7 +412,7 @@ class ChartDownloader:
                 if spinner.is_visible():
                     log(f"[Chart] Spinner topildi: {sel}")
                     try:
-                        spinner.wait_for(state="hidden", timeout=15000)
+                        spinner.wait_for(state="hidden", timeout=8000)
                         log("[Chart] Spinner tugadi")
                     except Exception:
                         log("[Chart] Spinner timeout -> davom etamiz")
@@ -371,7 +420,7 @@ class ChartDownloader:
             except Exception:
                 continue
 
-        # 5) Download tugmasini kutish (maks. 20s)
+        # 5) Download tugmasini kutish (maks. 10s)
         log("[Chart] Download tugmasi qidirilmoqda...")
         download_selectors = [
             'button:has-text("Download")',
@@ -384,7 +433,7 @@ class ChartDownloader:
 
         download_btn = None
         start_time = time.time()
-        while time.time() - start_time < 20:
+        while time.time() - start_time < 10:
             for sel in download_selectors:
                 try:
                     loc = page.locator(sel).first
@@ -399,13 +448,13 @@ class ChartDownloader:
             page.wait_for_timeout(500)
 
         if download_btn is None:
-            raise Exception("Share modal ochildi, lekin Download tugmasi 20 soniyada topilmadi")
+            raise Exception("Share modal ochildi, lekin Download tugmasi 10 soniyada topilmadi")
 
         # 6) Download eventni kutish
         log("[Chart] Download bosilmoqda, fayl kutilmoqda...")
         img_bytes = None
         try:
-            with page.expect_download(timeout=30000) as download_info:
+            with page.expect_download(timeout=15000) as download_info:
                 self._safe_click(page, download_btn, "Download tugmasi")
             download = download_info.value
             log(f"[Chart] Download boshlandi: {download.suggested_filename}")
@@ -687,7 +736,7 @@ try:
 except ImportError:
     _HAS_PSUTIL = False
 
-HARD_TIMEOUT = 90
+HARD_TIMEOUT = 45
 
 def _kill_process_tree(pid, timeout=5):
     """
