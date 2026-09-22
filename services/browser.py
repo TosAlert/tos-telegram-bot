@@ -61,6 +61,7 @@ class BrowserManager:
                 timezone_id="UTC",
                 color_scheme="light",
                 device_scale_factor=1,
+                service_workers="block",
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -88,8 +89,10 @@ class BrowserManager:
             )
             self.login_finviz()
 
-        self.context.set_default_timeout(60000)
-        self.context.set_default_navigation_timeout(60000)
+        # Chart worker uchun uzoq default timeoutlar kerak emas.
+        # Maxsus navigation timeoutlar chart.py ichida belgilanadi.
+        self.context.set_default_timeout(30000)
+        self.context.set_default_navigation_timeout(30000)
 
     def login_finviz(self):
         if not FINVIZ_EMAIL or not FINVIZ_PASSWORD:
