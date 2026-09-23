@@ -9,7 +9,7 @@ from playwright.sync_api import Error, TimeoutError
 from services.browser import browser_manager
 
 FINVIZ_URL = "https://finviz.com/quote.ashx?t={ticker}&p=d&r=m6"
-FINVIZ_DIRECT_CHART_URL = "https://charts2-node.finviz.com/chart.ashx"
+FINVIZ_DIRECT_CHART_URL = "https://charts2.finviz.com/chart.ashx"
 
 BLOCKED_DOMAINS = [
     "doubleclick.net", "googlesyndication", "google-analytics",
@@ -614,22 +614,26 @@ class ChartDownloader:
 def _get_direct_finviz_chart(ticker):
     """
     Browser/Chromium crash bo'lsa Finviz chartni to'g'ridan-to'g'ri
-    charts2.finviz.com endpointidan oladi.
+    Finviz charts2 endpointidan oladi.
 
-    Bu fallback browserga bog'liq emas. Oddiy daily chart qaytaradi.
+    ta=1 sababli fallback ham Finvizning texnik overlaylarini
+    (SMA20/50/200 va trendline/TA chiziqlari) saqlab qoladi.
+    Bu fallback browserga bog'liq emas.
     """
     ticker = (ticker or "").upper().strip()
     if not re.fullmatch(r"[A-Z.]{1,10}", ticker):
         log(f"[Direct Chart] Noto'g'ri ticker: {ticker}")
         return None
 
+    # Legacy Finviz chart endpointdagi ta=1 texnik overlaylarni yoqadi:
+    # SMA20/50/200 va Finviz trendline/technical-analysis chiziqlari.
+    # sf=2 esa mavjud bo'lsa 2x yuqori aniqlikni so'raydi.
     params = {
-        "cs": "m",
         "t": ticker,
-        "tf": "d",
-        "s": "linear",
-        "ct": "candle_stick",
-        "tm": "d",
+        "ty": "c",
+        "ta": "1",
+        "p": "d",
+        "s": "l",
         "sf": "2",
     }
     headers = {
