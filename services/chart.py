@@ -9,7 +9,7 @@ from playwright.sync_api import Error, TimeoutError
 from services.browser import browser_manager
 
 FINVIZ_URL = "https://finviz.com/quote.ashx?t={ticker}&p=d&r=m6"
-FINVIZ_DIRECT_CHART_URL = "https://charts2.finviz.com/chart.ashx"
+FINVIZ_DIRECT_CHART_URL = "https://charts2-node.finviz.com/chart.ashx"
 
 BLOCKED_DOMAINS = [
     "doubleclick.net", "googlesyndication", "google-analytics",
@@ -624,11 +624,13 @@ def _get_direct_finviz_chart(ticker):
         return None
 
     params = {
+        "cs": "m",
         "t": ticker,
-        "ty": "c",
-        "ta": "1",
-        "p": "d",
-        "s": "l",
+        "tf": "d",
+        "s": "linear",
+        "ct": "candle_stick",
+        "tm": "d",
+        "sf": "2",
     }
     headers = {
         "User-Agent": (
@@ -681,6 +683,9 @@ def _get_direct_finviz_chart(ticker):
                     f"{img.width}x{img.height} ({ticker})"
                 )
                 return None
+
+            # Finviz 2x (sf=2) chart odatda yuqori sifatli 648x360 atrofida
+            # qaytadi; Telegramga yuborish uchun original PNGni saqlaymiz.
 
             log(
                 f"[Direct Chart] OK: {ticker} | "
