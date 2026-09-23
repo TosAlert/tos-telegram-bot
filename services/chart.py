@@ -681,15 +681,31 @@ def _get_direct_finviz_chart(ticker):
             img.verify()
 
             img = Image.open(_io.BytesIO(img_bytes))
-            if img.width < 500 or img.height < 250:
+
+            # ta=1 overlayli legacy endpoint ayrim serverlarda 466x219
+            # atrofida qaytishi mumkin. Bu hali ham to'liq chart (SMA/TA
+            # overlaylari bilan), shuning uchun uni bekorga rad etmaymiz.
+            if img.width < 400 or img.height < 200:
                 log(
                     f"[Direct Chart] Rasm o'lchami juda kichik: "
                     f"{img.width}x{img.height} ({ticker})"
                 )
                 return None
 
-            # Finviz 2x (sf=2) chart odatda yuqori sifatli 648x360 atrofida
-            # qaytadi; Telegramga yuborish uchun original PNGni saqlaymiz.
+            # Ayrim Finviz node/legacy serverlari sf=2 parametrini e'tiborsiz
+            # qoldiradi. Telegramda juda kichik ko'rinmasligi uchun 466x219
+            # kabi valid chartni 2x qilib chiqaramiz. Bu overlaylarni saqlaydi.
+            if img.width < 900:
+                new_size = (img.width * 2, img.height * 2)
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                out = _io.BytesIO()
+                img.save(out, format="PNG")
+                img_bytes = out.getvalue()
+                log(
+                    f"[Direct Chart] Valid overlay chart 2x resize: "
+                    f"{img.width // 2}x{img.height // 2} -> "
+                    f"{img.width}x{img.height} ({ticker})"
+                )
 
             log(
                 f"[Direct Chart] OK: {ticker} | "
