@@ -711,7 +711,12 @@ def get_chart_and_info(ticker):
         if img:
             print(f"[Chart] Finviz OK : {ticker}", flush=True)
             return img, info
-        print("[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz", flush=True)
+        print("[Chart] Birinchi urinishda rasm olinmadi -> direct fallback", flush=True)
+        direct_img = _get_direct_finviz_chart(ticker)
+        if direct_img:
+            print(f"[Chart] DIRECT FALLBACK OK : {ticker}", flush=True)
+            return direct_img, info
+        print("[Chart] Direct fallback ham ishlamadi -> qayta urinamiz", flush=True)
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}", flush=True)
     except Error as e:
@@ -769,7 +774,12 @@ def get_chart(ticker):
         if img:
             print(f"[Chart] Finviz OK : {ticker}", flush=True)
             return img
-        print("[Chart] Birinchi urinishda rasm olinmadi -> qayta urinamiz", flush=True)
+        print("[Chart] Birinchi urinishda rasm olinmadi -> direct fallback", flush=True)
+        direct_img = _get_direct_finviz_chart(ticker)
+        if direct_img:
+            print(f"[Chart] DIRECT FALLBACK OK : {ticker}", flush=True)
+            return direct_img
+        print("[Chart] Direct fallback ham ishlamadi -> qayta urinamiz", flush=True)
     except TimeoutError as e:
         print(f"[Chart] Timeout : {e}", flush=True)
     except Error as e:
