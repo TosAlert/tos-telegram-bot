@@ -1,5 +1,7 @@
 import re
 import time
+import io as _io
+import requests
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from playwright.sync_api import Error, TimeoutError
@@ -7,6 +9,7 @@ from playwright.sync_api import Error, TimeoutError
 from services.browser import browser_manager
 
 FINVIZ_URL = "https://finviz.com/quote.ashx?t={ticker}&p=d&r=m6"
+FINVIZ_DIRECT_CHART_URL = "https://charts2.finviz.com/chart.ashx"
 
 BLOCKED_DOMAINS = [
     "doubleclick.net", "googlesyndication", "google-analytics",
@@ -608,6 +611,92 @@ class ChartDownloader:
             return None
 
 
+def _get_direct_finviz_chart(ticker):
+    """
+    Browser/Chromium crash bo'lsa Finviz chartni to'g'ridan-to'g'ri
+    charts2.finviz.com endpointidan oladi.
+
+    Bu fallback browserga bog'liq emas. Oddiy daily chart qaytaradi.
+    """
+    ticker = (ticker or "").upper().strip()
+    if not re.fullmatch(r"[A-Z.]{1,10}", ticker):
+        log(f"[Direct Chart] Noto'g'ri ticker: {ticker}")
+        return None
+
+    params = {
+        "t": ticker,
+        "ty": "c",
+        "ta": "1",
+        "p": "d",
+        "s": "l",
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/138.0.0.0 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer": f"https://finviz.com/quote.ashx?t={ticker}",
+    }
+
+    try:
+        log(f"[Direct Chart] START: {ticker}")
+        resp = requests.get(
+            FINVIZ_DIRECT_CHART_URL,
+            params=params,
+            headers=headers,
+            timeout=15,
+        )
+
+        if resp.status_code != 200:
+            log(f"[Direct Chart] HTTP {resp.status_code}: {ticker}")
+            return None
+
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+        img_bytes = resp.content
+
+        if not img_bytes or len(img_bytes) < 10_000:
+            log(
+                f"[Direct Chart] Rasm juda kichik/bo'sh: "
+                f"{len(img_bytes)} bytes ({ticker})"
+            )
+            return None
+
+        # HTML login/error sahifasi qaytib qolgan bo'lsa, uni rasm deb qabul qilmaymiz.
+        if "text/html" in content_type or img_bytes[:20].lower().startswith(b"<!doctype"):
+            log(f"[Direct Chart] HTML/error javob qaytdi: {ticker}")
+            return None
+
+        try:
+            from PIL import Image
+
+            img = Image.open(_io.BytesIO(img_bytes))
+            img.verify()
+
+            img = Image.open(_io.BytesIO(img_bytes))
+            if img.width < 500 or img.height < 250:
+                log(
+                    f"[Direct Chart] Rasm o'lchami juda kichik: "
+                    f"{img.width}x{img.height} ({ticker})"
+                )
+                return None
+
+            log(
+                f"[Direct Chart] OK: {ticker} | "
+                f"{img.width}x{img.height} | {len(img_bytes) // 1024} KB"
+            )
+            return img_bytes
+
+        except Exception as e:
+            log(f"[Direct Chart] Rasm tekshiruvida xato ({ticker}): {e}")
+            return None
+
+    except Exception as e:
+        log(f"[Direct Chart] Xato ({ticker}): {e}")
+        return None
+
+
 def get_chart_and_info(ticker):
     """
     Bitta Finviz sahifa ochilishidan HAM grafik, HAM matnli ma'lumotlarni oladi.
@@ -635,6 +724,13 @@ def get_chart_and_info(ticker):
                 page.close()
         except Exception:
             pass
+
+    # Browser crash/timeout bo'lsa, 2-marta Chromium ochishdan oldin
+    # browserga bog'liq bo'lmagan direct Finviz chartni sinab ko'ramiz.
+    direct_img = _get_direct_finviz_chart(ticker)
+    if direct_img:
+        print(f"[Chart] DIRECT FALLBACK OK: {ticker}", flush=True)
+        return direct_img, None
 
     try:
         if hasattr(browser_manager, "restart"):
@@ -686,6 +782,13 @@ def get_chart(ticker):
                 page.close()
         except Exception:
             pass
+
+    # Browser crash/timeout bo'lsa, 2-marta Chromium ochishdan oldin
+    # direct Finviz chart fallbackni sinab ko'ramiz.
+    direct_img = _get_direct_finviz_chart(ticker)
+    if direct_img:
+        print(f"[Chart] DIRECT FALLBACK OK: {ticker}", flush=True)
+        return direct_img
 
     try:
         if hasattr(browser_manager, "restart"):
